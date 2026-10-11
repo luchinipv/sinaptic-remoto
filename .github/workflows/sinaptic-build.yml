@@ -1,5 +1,6 @@
 # Compilación de Sinaptic Remoto (fork de RustDesk 1.5.0, AGPL-3.0).
-# Solo Windows x64 (.exe autoinstalable) y Android arm64 (.apk firmado con llave de depuración).
+# Solo Windows x64 (.exe autoinstalable) y Android arm64 (.apk firmado con la llave propia
+# «sinaptic-remoto», secretos ANDROID_*; sin ellos el workflow falla, no cae a la de depuración).
 # Derivado de flutter-build.yml / bridge.yml, sin pasos que piden secretos de RustDesk
 # (firma de código, subida a sus servidores, MSI, ventana TopMost).
 name: Sinaptic Remoto - compilar
@@ -14,7 +15,7 @@ on:
       etiqueta:
         description: "Etiqueta de la Release"
         type: string
-        default: "sinaptic-1.5.0-1"
+        default: "sinaptic-1.5.0-2"
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -28,6 +29,8 @@ env:
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VERSION: "1.5.0"
+  # Versión de Sinaptic Remoto (nombre de archivos); va a la par de flutter/pubspec.yaml
+  SINAPTIC_VERSION: "1.5.0-2"
   NDK_VERSION: "r28c"
 
 jobs:
@@ -228,7 +231,7 @@ jobs:
           python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
           popd
           mkdir -p ./SalidaSinaptic
-          mv ./target/release/rustdesk-portable-packer.exe ./SalidaSinaptic/SinapticRemoto-${{ env.VERSION }}-x86_64.exe
+          mv ./target/release/rustdesk-portable-packer.exe ./SalidaSinaptic/SinapticRemoto-${{ env.SINAPTIC_VERSION }}-x86_64.exe
           sha256sum ./SalidaSinaptic/*.exe
 
       - name: Upload exe
@@ -243,6 +246,19 @@ jobs:
     env:
       TARGET: aarch64-linux-android
     steps:
+      - name: Comprobar secretos de firma
+        env:
+          ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+          ANDROID_ALIAS: ${{ secrets.ANDROID_ALIAS }}
+          ANDROID_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          falta=0
+          for v in ANDROID_SIGNING_KEY ANDROID_ALIAS ANDROID_KEY_STORE_PASSWORD ANDROID_KEY_PASSWORD; do
+            if [ -z "${!v}" ]; then echo "::error::Falta el secreto $v: no se firma con la llave de depuración"; falta=1; fi
+          done
+          exit $falta
+
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
@@ -341,7 +357,8 @@ jobs:
         run: |
           export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
           sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" ./flutter/android/gradle.properties
-          # Sin llave propia todavía: se firma con la llave de depuración (igual que el workflow oficial)
+          # Gradle firma de forma provisional con la de depuración; el paso siguiente
+          # vuelve a firmar con la llave propia (apksigner reemplaza las firmas).
           sed -i "s/signingConfigs.release/signingConfigs.debug/g" ./flutter/android/app/build.gradle
           mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
           cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
@@ -350,7 +367,36 @@ jobs:
           flutter build apk --release --target-platform android-arm64 --split-per-abi
           popd
           mkdir -p SalidaSinaptic
-          mv flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk SalidaSinaptic/SinapticRemoto-${{ env.VERSION }}-aarch64.apk
+          mv flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk SalidaSinaptic/sin-firmar.apk
+
+      - name: Firmar apk con la llave propia
+        shell: bash
+        env:
+          ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+          ANDROID_ALIAS: ${{ secrets.ANDROID_ALIAS }}
+          ANDROID_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          BT=$(ls "$SDK/build-tools" | sort -V | tail -n 1)
+          APKSIGNER="$SDK/build-tools/$BT/apksigner"
+          echo "apksigner: $APKSIGNER"
+          KS="$RUNNER_TEMP/sinaptic-remoto.jks"
+          echo "$ANDROID_SIGNING_KEY" | base64 -d > "$KS"
+          SALIDA="SalidaSinaptic/SinapticRemoto-${{ env.SINAPTIC_VERSION }}-aarch64.apk"
+          "$APKSIGNER" sign \
+            --ks "$KS" --ks-key-alias "$ANDROID_ALIAS" \
+            --ks-pass env:ANDROID_KEY_STORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --out "$SALIDA" SalidaSinaptic/sin-firmar.apk
+          rm -f "$KS" SalidaSinaptic/sin-firmar.apk "$SALIDA.idsig"
+          "$APKSIGNER" verify --verbose --print-certs "$SALIDA" | tee verificacion.txt
+          if grep -qi "Android Debug" verificacion.txt; then
+            echo "::error::El APK quedó firmado con la llave de depuración"; exit 1
+          fi
+          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" verificacion.txt
+          grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" verificacion.txt
           sha256sum SalidaSinaptic/*.apk
 
       - name: Upload apk
@@ -385,7 +431,7 @@ jobs:
           prerelease: true
           tag_name: ${{ inputs.etiqueta }}
           target_commitish: ${{ github.sha }}
-          name: "Sinaptic Remoto ${{ env.VERSION }} (${{ inputs.etiqueta }})"
+          name: "Sinaptic Remoto ${{ env.SINAPTIC_VERSION }} (${{ inputs.etiqueta }})"
           body: |
             Sinaptic Remoto: compilación de RustDesk ${{ env.VERSION }} (AGPL-3.0) con el servidor propio ya configurado.
 
@@ -393,7 +439,8 @@ jobs:
             - Llave pública del servidor incluida
             - Idioma por defecto: español
 
-            Binarios sin firma de código (Windows) y APK firmado con llave de depuración.
+            Android: id de aplicación propio `co.sinaptic.remoto` (se instala junto a RustDesk oficial) y APK firmado con la llave propia de Sinaptic (v1, v2 y v3).
+            Windows: el .exe todavía no lleva firma de código.
             Código fuente: rama `sinaptic` de este repositorio. Basado en https://github.com/rustdesk/rustdesk (créditos y licencia AGPL-3.0 intactos).
           files: |
             ./salida/*
