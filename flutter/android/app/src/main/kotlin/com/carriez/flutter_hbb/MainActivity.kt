@@ -242,6 +242,7 @@ class MainActivity : FlutterActivity() {
         // which must not tear down a live session.
         if (isFinishing) {
             FFI.closeAllSessions()
+            ClientKeepAliveService.stop(this)
         }
         mainService?.let {
             unbindService(serviceConnection)
@@ -366,6 +367,15 @@ class MainActivity : FlutterActivity() {
                 }
                 "try_sync_clipboard" -> {
                     rdClipboardManager?.syncClipboard(true)
+                    result.success(true)
+                }
+                // Sinaptic Remoto: sesión de control viva en segundo plano.
+                "client_keepalive" -> {
+                    when (call.arguments as? String) {
+                        "foreground" -> ClientKeepAliveService.update(this@MainActivity, false)
+                        "background" -> ClientKeepAliveService.update(this@MainActivity, true)
+                        else -> ClientKeepAliveService.stop(this@MainActivity)
+                    }
                     result.success(true)
                 }
                 GET_START_ON_BOOT_OPT -> {

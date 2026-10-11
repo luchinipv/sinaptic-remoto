@@ -84,6 +84,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   final TextEditingController _textController =
       TextEditingController(text: initText);
 
+  // Sinaptic Remoto: teclado para redactar. El texto se conserva mientras dure
+  // la sesión aunque se cierre la caja sin enviar.
+  final TextEditingController _composerController = TextEditingController();
+  bool _composerEnterAtEnd = false;
+
   _RemotePageState(String id) {
     initSharedStates(id);
     gFFI.chatModel.voiceCallStatus.value = VoiceCallStatus.notStarted;
@@ -124,6 +129,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           isKeyboardVisible: keyboardVisibilityController.isVisible);
     });
     WidgetsBinding.instance.addObserver(this);
+    // Sinaptic Remoto: servicio en primer plano mientras dure la sesión de control.
+    if (isAndroid) {
+      gFFI.invokeMethod("client_keepalive", "foreground");
+    }
 
     inputModel.keyboardInputAllowed = true;
 
@@ -151,6 +160,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // "Connecting...". Dispatching it here makes teardown happen synchronously on
     // pop; the `sessionClose` in `gFFI.close()` becomes a no-op once removed.
     unawaited(bind.sessionClose(sessionId: sessionId));
+    if (isAndroid) {
+      unawaited(gFFI.invokeMethod("client_keepalive", "stop"));
+    }
     // https://github.com/flutter/flutter/issues/64935
     super.dispose();
     gFFI.dialogManager.hideMobileActionsOverlay(store: false);
@@ -160,6 +172,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     await gFFI.invokeMethod("enable_soft_keyboard", true);
     _mobileFocusNode.dispose();
     _physicalFocusNode.dispose();
+    _composerController.dispose();
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
     inputModel.keyboardInputAllowed = true;
@@ -182,6 +195,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
+      if (isAndroid) {
+        gFFI.invokeMethod("client_keepalive", "foreground");
+      }
+    } else if (state == AppLifecycleState.paused) {
+      if (isAndroid) {
+        gFFI.invokeMethod("client_keepalive", "background");
+      }
     }
   }
 
@@ -433,6 +453,141 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _composerPressKey(String name) async {
+    await bind.sessionInputKey(
+        sessionId: sessionId,
+        name: name,
+        down: false,
+        press: true,
+        alt: false,
+        ctrl: false,
+        shift: false,
+        command: false);
+  }
+
+  // Escribe el texto en el equipo remoto donde esté el cursor. Cada línea va
+  // como secuencia Unicode (KeyEvent.seq: tildes y ñ incluidas) y los saltos de
+  // línea como Enter, para que funcionen igual en cualquier programa.
+  Future<bool> _composerSend(String text, bool enterAtEnd) async {
+    if (!inputModel.keyboardInputAllowed || !inputModel.keyboardPerm) {
+      showToast(translate('Keyboard input is not allowed'));
+      return false;
+    }
+    final lines = text.replaceAll('\r\n', '\n').split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].isNotEmpty) {
+        await bind.sessionInputString(sessionId: sessionId, value: lines[i]);
+      }
+      if (i < lines.length - 1) {
+        await _composerPressKey('VK_RETURN');
+      }
+    }
+    if (enterAtEnd) {
+      await _composerPressKey('VK_RETURN');
+    }
+    return true;
+  }
+
+  void openComposer() {
+    setState(() => _showEdit = false);
+    gFFI.invokeMethod("enable_soft_keyboard", true);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setSheetState) {
+          return Padding(
+            padding: EdgeInsets.only(
+                left: 12,
+                right: 12,
+                top: 12,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Redactar y enviar al equipo remoto',
+                    style: Theme.of(ctx).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _composerController,
+                  autofocus: true,
+                  keyboardType: TextInputType.multiline,
+                  textCapitalization: TextCapitalization.sentences,
+                  autocorrect: true,
+                  enableSuggestions: true,
+                  minLines: 3,
+                  maxLines: 8,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: 'Escriba aquí; se envía al pulsar «Enviar»',
+                  ),
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Pulsar Enter al final'),
+                  value: _composerEnterAtEnd,
+                  onChanged: (v) =>
+                      setSheetState(() => _composerEnterAtEnd = v ?? false),
+                ),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  children: [
+                    TextButton.icon(
+                      icon: const Icon(Icons.content_paste),
+                      label: const Text('Pegar del celular'),
+                      onPressed: () async {
+                        final data =
+                            await Clipboard.getData(Clipboard.kTextPlain);
+                        final paste = data?.text ?? '';
+                        if (paste.isEmpty) return;
+                        final value = _composerController.value;
+                        final sel = value.selection;
+                        final start = sel.isValid ? sel.start : value.text.length;
+                        final end = sel.isValid ? sel.end : value.text.length;
+                        final newText =
+                            value.text.replaceRange(start, end, paste);
+                        _composerController.value = TextEditingValue(
+                          text: newText,
+                          selection: TextSelection.collapsed(
+                              offset: start + paste.length),
+                        );
+                      },
+                    ),
+                    TextButton.icon(
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('Borrar'),
+                      onPressed: () => _composerController.clear(),
+                    ),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.send),
+                      label: const Text('Enviar'),
+                      onPressed: () async {
+                        final text = _composerController.text;
+                        if (text.isEmpty && !_composerEnterAtEnd) return;
+                        final ok = await _composerSend(text, _composerEnterAtEnd);
+                        if (ok) {
+                          _composerController.clear();
+                          if (ctx.mounted) Navigator.of(ctx).pop();
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        });
+      },
+    ).whenComplete(() {
+      if (!mounted) return;
+      gFFI.invokeMethod("enable_soft_keyboard", false);
+      _physicalFocusNode.requestFocus();
+    });
+  }
+
   Widget _bottomWidget() => _showGestureHelp
       ? getGestureHelp()
       : (_showBar && gFFI.ffiModel.pi.displays.isNotEmpty
@@ -586,6 +741,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   icon: Icon(Icons.keyboard),
                                   onPressed: openKeyboard),
                               IconButton(
+                                  color: Colors.white,
+                                  tooltip: 'Redactar',
+                                  icon: Icon(Icons.edit_note),
+                                  onPressed: openComposer),
+                              IconButton(
                                 color: Colors.white,
                                 icon: const Icon(Icons.build),
                                 onPressed: () => gFFI.dialogManager
@@ -597,6 +757,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   color: Colors.white,
                                   icon: Icon(Icons.keyboard),
                                   onPressed: openKeyboard),
+                              IconButton(
+                                  color: Colors.white,
+                                  tooltip: 'Redactar',
+                                  icon: Icon(Icons.edit_note),
+                                  onPressed: openComposer),
                               IconButton(
                                 color: Colors.white,
                                 icon: Icon(gFFI.ffiModel.touchMode
