@@ -347,6 +347,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   void _handleNonIOSSoftKeyboardInput(String newValue) {
     var oldValue = _value;
+    // Sinaptic Remoto: con texto predictivo (teclado Samsung, Gboard) el IME a
+    // veces vacía el campo un instante y lo vuelve a llenar con la palabra en
+    // composición, que incluye los '1' de relleno. Antes eso mandaba un solo
+    // retroceso y luego todo el relleno («1111111»). Ese vaciado transitorio
+    // se ignora y se conserva el valor anterior para comparar.
+    if (newValue.isEmpty && oldValue.length > 1) {
+      return;
+    }
     _value = newValue;
     if (oldValue.isNotEmpty &&
         newValue.isNotEmpty &&
@@ -355,13 +363,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       // clipboard
       oldValue = '';
     }
-    if (newValue.length == oldValue.length) {
-      // ?
-    } else if (newValue.length < oldValue.length) {
-      final char = 'VK_BACK';
-      inputModel.inputKey(char);
-    } else {
-      final content = newValue.substring(oldValue.length);
+    // Sinaptic Remoto: diferencia por prefijo común en vez de solo por longitud.
+    // Así una sustitución del IME (borrar y escribir en el mismo cambio, o el
+    // autocorrector reemplazando una palabra) manda los retrocesos y el texto
+    // nuevo exactos, en lugar de no mandar nada («sale en blanco»).
+    var common = 0;
+    while (common < oldValue.length &&
+        common < newValue.length &&
+        oldValue[common] == newValue[common]) {
+      common++;
+    }
+    final deletes = oldValue.length - common;
+    for (var i = 0; i < deletes; i++) {
+      inputModel.inputKey('VK_BACK');
+    }
+    if (newValue.length > common) {
+      final content = newValue.substring(common);
       if (content.length > 1) {
         if (oldValue != '' &&
             content.length == 2 &&
