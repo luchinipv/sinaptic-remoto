@@ -2357,7 +2357,38 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+// Sinaptic Remoto: servidor propio, relé y llave pública fijados en la compilación.
+// Van como valores por defecto (DEFAULT_SETTINGS), el mismo mecanismo que usa
+// un custom.txt de cliente personalizado; el usuario los puede cambiar en Red.
+pub const SINAPTIC_APP_NAME: &str = "SinapticRemoto";
+pub const SINAPTIC_RENDEZVOUS_SERVER: &str = "185.75.12.74";
+pub const SINAPTIC_RELAY_SERVER: &str = "185.75.12.74";
+pub const SINAPTIC_RS_PUB_KEY: &str = "VsQY67d9Jb2RNkCJFaODAaRD8vQmwIZMeBrgUlxFVs8=";
+pub const SINAPTIC_DEFAULT_LANG: &str = "es";
+
+pub fn apply_sinaptic_defaults() {
+    // Sin espacios: el nombre se usa sin comillas en `sc create` y en el esquema URI.
+    *config::APP_NAME.write().unwrap() = SINAPTIC_APP_NAME.to_owned();
+    {
+        let mut s = config::DEFAULT_SETTINGS.write().unwrap();
+        s.insert(
+            keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_owned(),
+            SINAPTIC_RENDEZVOUS_SERVER.to_owned(),
+        );
+        s.insert(
+            keys::OPTION_RELAY_SERVER.to_owned(),
+            SINAPTIC_RELAY_SERVER.to_owned(),
+        );
+        s.insert(keys::OPTION_KEY.to_owned(), SINAPTIC_RS_PUB_KEY.to_owned());
+    }
+    config::DEFAULT_LOCAL_SETTINGS
+        .write()
+        .unwrap()
+        .insert(keys::OPTION_LANGUAGE.to_owned(), SINAPTIC_DEFAULT_LANG.to_owned());
+}
+
 pub fn load_custom_client() {
+    apply_sinaptic_defaults();
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
@@ -2456,6 +2487,7 @@ pub fn get_dst_align_rgba() -> usize {
 }
 
 pub fn read_custom_client(config: &str) {
+    apply_sinaptic_defaults();
     let Ok(data) = decode64(config) else {
         log::error!("Failed to decode custom client config");
         return;
