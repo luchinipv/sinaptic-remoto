@@ -124,6 +124,8 @@ Future<void> initEnv(String appType) async {
   // for convenience, use global FFI on mobile platform
   // focus on multi-ffi on desktop first
   await initGlobalFFI();
+  // Sinaptic Remoto: el color de la app que eligió el usuario.
+  MyTheme.cargarColorGuardado();
   // await Firebase.initializeApp();
   _registerEventHandler();
   // Update the system theme.

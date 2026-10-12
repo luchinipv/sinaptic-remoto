@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher_string.dart';
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
+import '../../common/widgets/selector_color.dart';
 import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
@@ -897,6 +898,15 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               showThemeSettings(gFFI.dialogManager);
             },
           ),
+          // Sinaptic Remoto: el color de la app, se aplica al momento.
+          SettingsTile(
+            title: Text(translate('Color de la app')),
+            value: Text(nombreDelColorActual()),
+            leading: Icon(Icons.palette, color: MyTheme.accent),
+            onPressed: (context) {
+              showColorSettings(gFFI.dialogManager, () => setState(() {}));
+            },
+          ),
           if (!bind.isDisableAccount())
             SettingsTile.switchTile(
               title: Text(translate('note-at-conn-end-tip')),
@@ -1164,6 +1174,19 @@ void showThemeSettings(OverlayDialogManager dialogManager) async {
         getRadio(Text(translate('Follow System')), ThemeMode.system, themeMode,
             isOptFixed ? null : setTheme)
       ]),
+    );
+  }, backDismiss: true, clickMaskDismiss: true);
+}
+
+void showColorSettings(
+    OverlayDialogManager dialogManager, VoidCallback alCambiar) {
+  dialogManager.show((setState, close, context) {
+    return CustomAlertDialog(
+      title: Text(translate('Color de la app')),
+      content: SelectorDeColor(alCambiar: () {
+        alCambiar();
+        Future.delayed(Duration(milliseconds: 200), close);
+      }),
     );
   }, backDismiss: true, clickMaskDismiss: true);
 }

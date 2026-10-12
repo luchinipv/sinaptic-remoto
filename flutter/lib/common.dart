@@ -245,21 +245,87 @@ class ColorThemeExtension extends ThemeExtension<ColorThemeExtension> {
   }
 }
 
+/// Un color que el usuario puede elegir para la app (Ajustes).
+class ColorDeApp {
+  final String nombre;
+  final Color color;
+  const ColorDeApp(this.nombre, this.color);
+}
+
 class MyTheme {
   MyTheme._();
 
   static const Color grayBg = Color(0xFFEFEFF2);
-  static const Color accent = Color(0xFF0071FF);
-  static const Color accent50 = Color(0x770071FF);
-  static const Color accent80 = Color(0xAA0071FF);
+
+  // Sinaptic Remoto: color de la app. Por defecto el morado de la marca
+  // Sinaptic (#6332F9, el de la web y el isotipo); el usuario puede elegir
+  // otro en Ajustes y se guarda como opción local (kOpcionColorApp).
+  // accent/accent50/accent80/button dejan de ser constantes por eso.
+  static const String kOpcionColorApp = 'sinaptic-color-app';
+  static const Color colorSinaptic = Color(0xFF6332F9);
+  static const List<ColorDeApp> coloresDeApp = [
+    ColorDeApp('Morado Sinaptic', colorSinaptic),
+    ColorDeApp('Azul', Color(0xFF0071FF)),
+    ColorDeApp('Cian', Color(0xFF0891B2)),
+    ColorDeApp('Verde azulado', Color(0xFF0F766E)),
+    ColorDeApp('Verde', Color(0xFF16A34A)),
+    ColorDeApp('Naranja', Color(0xFFEA580C)),
+    ColorDeApp('Rojo', Color(0xFFDC2626)),
+    ColorDeApp('Rosa', Color(0xFFDB2777)),
+    ColorDeApp('Grafito', Color(0xFF2F4F6F)),
+  ];
+
+  static Color accent = colorSinaptic;
+  static Color accent50 = colorSinaptic.withAlpha(0x77);
+  static Color accent80 = colorSinaptic.withAlpha(0xAA);
+  static Color button = Color.lerp(colorSinaptic, Colors.white, 0.17)!;
+
   static const Color canvasColor = Color(0xFF212121);
   static const Color border = Color(0xFFCCCCCC);
   static const Color idColor = Color(0xFF00B6F0);
   static const Color darkGray = Color.fromARGB(255, 148, 148, 148);
   static const Color cmIdColor = Color(0xFF21790B);
   static const Color dark = Colors.black87;
-  static const Color button = Color(0xFF2C8CFF);
   static const Color hoverBorder = Color(0xFF999999);
+
+  /// Cambia los colores derivados y rehace los temas claro y oscuro.
+  static void aplicarColor(Color c) {
+    accent = c;
+    accent50 = c.withAlpha(0x77);
+    accent80 = c.withAlpha(0xAA);
+    button = Color.lerp(c, Colors.white, 0.17)!;
+    lightTheme = _temaClaro();
+    darkTheme = _temaOscuro();
+  }
+
+  /// El color guardado (opción local) o el de Sinaptic si no hay o no se entiende.
+  static Color colorGuardado() {
+    try {
+      final v = bind.mainGetLocalOption(key: kOpcionColorApp).trim();
+      if (v.isNotEmpty) {
+        return Color(
+            int.parse(v.replaceFirst('#', ''), radix: 16) | 0xFF000000);
+      }
+    } catch (_) {}
+    return colorSinaptic;
+  }
+
+  static void cargarColorGuardado() {
+    final c = colorGuardado();
+    if (c.value != accent.value) aplicarColor(c);
+  }
+
+  /// Guarda el color elegido y lo aplica sin reiniciar (todas las ventanas).
+  static Future<void> cambiarColor(Color c) async {
+    final hex = (c.value & 0xFFFFFF).toRadixString(16).padLeft(6, '0');
+    await bind.mainSetLocalOption(key: kOpcionColorApp, value: '#$hex');
+    aplicarColor(c);
+    if (isDesktop) {
+      await reloadAllWindows();
+    } else {
+      reloadCurrentWindow();
+    }
+  }
 
   // ListTile
   static const ListTileThemeData listTileTheme = ListTileThemeData(
@@ -369,7 +435,10 @@ class MyTheme {
     }),
   );
 
-  static ThemeData lightTheme = ThemeData(
+  static ThemeData lightTheme = _temaClaro();
+  static ThemeData darkTheme = _temaOscuro();
+
+  static ThemeData _temaClaro() => ThemeData(
     // https://stackoverflow.com/questions/77537315/after-upgrading-to-flutter-3-16-the-app-bar-background-color-button-size-and
     useMaterial3: false,
     brightness: Brightness.light,
@@ -400,7 +469,7 @@ class MyTheme {
             ),
           )
         : null,
-    textTheme: const TextTheme(
+    textTheme: TextTheme(
         titleLarge: TextStyle(fontSize: 19, color: Colors.black87),
         titleSmall: TextStyle(fontSize: 14, color: Colors.black87),
         bodySmall: TextStyle(fontSize: 12, color: Colors.black87, height: 1.25),
@@ -452,7 +521,7 @@ class MyTheme {
         style:
             MenuStyle(backgroundColor: MaterialStatePropertyAll(Colors.white))),
     colorScheme: ColorScheme.light(
-        primary: Colors.blue, secondary: accent, background: grayBg),
+        primary: accent, secondary: accent, background: grayBg),
     popupMenuTheme: PopupMenuThemeData(
         color: Colors.white,
         shape: RoundedRectangleBorder(
@@ -468,7 +537,7 @@ class MyTheme {
       TabbarTheme.light,
     ],
   );
-  static ThemeData darkTheme = ThemeData(
+  static ThemeData _temaOscuro() => ThemeData(
     useMaterial3: false,
     brightness: Brightness.dark,
     hoverColor: Color.fromARGB(255, 45, 46, 53),
@@ -498,7 +567,7 @@ class MyTheme {
             ),
           )
         : null,
-    textTheme: const TextTheme(
+    textTheme: TextTheme(
       titleLarge: TextStyle(fontSize: 19),
       titleSmall: TextStyle(fontSize: 14),
       bodySmall: TextStyle(fontSize: 12, height: 1.25),
@@ -560,7 +629,7 @@ class MyTheme {
         style: MenuStyle(
             backgroundColor: MaterialStatePropertyAll(Color(0xFF121212)))),
     colorScheme: ColorScheme.dark(
-      primary: Colors.blue,
+      primary: accent,
       secondary: accent,
       background: Color(0xFF24252B),
     ),
@@ -928,7 +997,7 @@ class OverlayDialogManager {
                                   style: flatButtonStyle,
                                   onPressed: cancel,
                                   child: Text(translate('Cancel'),
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                           color: MyTheme.accent)))))
                 ])),
         onCancel: showCancel ? cancel : null,
@@ -1321,7 +1390,7 @@ Color? _msgboxColor(String type) {
   if (type.contains("error") || type == "re-input-password") {
     return Color(0xFFE04F5F);
   }
-  return Color(0xFF2C8CFF);
+  return MyTheme.button;
 }
 
 Widget msgboxIcon(String type) {
@@ -2792,6 +2861,8 @@ class WakelockManager {
 /// [Note]
 /// Must have [RefreshWrapper] on the top of widget tree.
 void reloadCurrentWindow() {
+  // Sinaptic Remoto: las demás ventanas toman el color que se eligió en otra.
+  MyTheme.cargarColorGuardado();
   if (Get.context != null) {
     // reload self window
     RefreshWrapper.of(Get.context!)?.rebuild();
