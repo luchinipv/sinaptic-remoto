@@ -108,6 +108,27 @@ android {
         versionName flutterVersionName
     }
 
+    // Sinaptic Remoto: dos variantes.
+    // - completo: la app de siempre (controla y se deja controlar).
+    // - cliente: solo controla otros equipos. Su manifiesto (src/cliente) quita el
+    //   servicio de accesibilidad, la captura de pantalla y los permisos del lado
+    //   «host», que son los que hacen que Play Protect bloquee la instalación.
+    //   Se compila con --dart-define=SINAPTIC_SOLO_CLIENTE=true.
+    flavorDimensions "variante"
+    productFlavors {
+        completo {
+            dimension "variante"
+            manifestPlaceholders = [etiquetaApp: "Sinaptic Remoto", etiquetaLanzador: "Sinaptic Remoto"]
+            resValue "bool", "sinaptic_solo_cliente", "false"
+        }
+        cliente {
+            dimension "variante"
+            applicationIdSuffix ".cliente"
+            manifestPlaceholders = [etiquetaApp: "Sinaptic Remoto Cliente", etiquetaLanzador: "Sinaptic Cliente"]
+            resValue "bool", "sinaptic_solo_cliente", "true"
+        }
+    }
+
     signingConfigs {
       release {
         keyAlias keystoreProperties['keyAlias']

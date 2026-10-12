@@ -1,6 +1,8 @@
 # Compilación de Sinaptic Remoto (fork de RustDesk 1.5.0, AGPL-3.0).
 # Solo Windows x64 (.exe autoinstalable) y Android arm64 (.apk firmado con la llave propia
 # «sinaptic-remoto», secretos ANDROID_*; sin ellos el workflow falla, no cae a la de depuración).
+# Android sale en dos variantes de Gradle: «completo» (co.sinaptic.remoto) y «cliente»
+# (co.sinaptic.remoto.cliente, solo controla; sin accesibilidad ni captura de pantalla).
 # Derivado de flutter-build.yml / bridge.yml, sin pasos que piden secretos de RustDesk
 # (firma de código, subida a sus servidores, MSI, ventana TopMost).
 name: Sinaptic Remoto - compilar
@@ -15,7 +17,7 @@ on:
       etiqueta:
         description: "Etiqueta de la Release"
         type: string
-        default: "sinaptic-1.5.0-3"
+        default: "sinaptic-1.5.0-4"
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -30,7 +32,7 @@ env:
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VERSION: "1.5.0"
   # Versión de Sinaptic Remoto (nombre de archivos); va a la par de flutter/pubspec.yaml
-  SINAPTIC_VERSION: "1.5.0-3"
+  SINAPTIC_VERSION: "1.5.0-4"
   NDK_VERSION: "r28c"
 
 jobs:
@@ -363,11 +365,21 @@ jobs:
           mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
           cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
           cp ./target/${{ env.TARGET }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
-          pushd flutter
-          flutter build apk --release --target-platform android-arm64 --split-per-abi
-          popd
           mkdir -p SalidaSinaptic
-          mv flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk SalidaSinaptic/sin-firmar.apk
+          pushd flutter
+          # Variante completa (controla y se deja controlar): co.sinaptic.remoto
+          flutter build apk --release --flavor completo --target-platform android-arm64 --split-per-abi
+          ls -l build/app/outputs/flutter-apk/
+          APK=$(find build/app/outputs/flutter-apk -name 'app-arm64-v8a-completo-release.apk' | head -n 1)
+          test -n "$APK"
+          mv "$APK" ../SalidaSinaptic/sin-firmar-completo.apk
+          # Variante solo cliente (sin accesibilidad ni captura de pantalla): co.sinaptic.remoto.cliente
+          flutter build apk --release --flavor cliente --dart-define=SINAPTIC_SOLO_CLIENTE=true --target-platform android-arm64 --split-per-abi
+          ls -l build/app/outputs/flutter-apk/
+          APK=$(find build/app/outputs/flutter-apk -name 'app-arm64-v8a-cliente-release.apk' | head -n 1)
+          test -n "$APK"
+          mv "$APK" ../SalidaSinaptic/sin-firmar-cliente.apk
+          popd
 
       - name: Firmar apk con la llave propia
         shell: bash
@@ -384,20 +396,61 @@ jobs:
           echo "apksigner: $APKSIGNER"
           KS="$RUNNER_TEMP/sinaptic-remoto.jks"
           echo "$ANDROID_SIGNING_KEY" | base64 -d > "$KS"
-          SALIDA="SalidaSinaptic/SinapticRemoto-${{ env.SINAPTIC_VERSION }}-aarch64.apk"
-          "$APKSIGNER" sign \
-            --ks "$KS" --ks-key-alias "$ANDROID_ALIAS" \
-            --ks-pass env:ANDROID_KEY_STORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
-            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            --out "$SALIDA" SalidaSinaptic/sin-firmar.apk
-          rm -f "$KS" SalidaSinaptic/sin-firmar.apk "$SALIDA.idsig"
-          "$APKSIGNER" verify --verbose --print-certs "$SALIDA" | tee verificacion.txt
-          if grep -qi "Android Debug" verificacion.txt; then
-            echo "::error::El APK quedó firmado con la llave de depuración"; exit 1
-          fi
-          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" verificacion.txt
-          grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" verificacion.txt
+          firmar() {
+            local ENTRADA="$1" SALIDA="$2"
+            "$APKSIGNER" sign \
+              --ks "$KS" --ks-key-alias "$ANDROID_ALIAS" \
+              --ks-pass env:ANDROID_KEY_STORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+              --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+              --out "$SALIDA" "$ENTRADA"
+            rm -f "$ENTRADA" "$SALIDA.idsig"
+            "$APKSIGNER" verify --verbose --print-certs "$SALIDA" | tee verificacion.txt
+            if grep -qi "Android Debug" verificacion.txt; then
+              echo "::error::$SALIDA quedó firmado con la llave de depuración"; exit 1
+            fi
+            grep -q "CN=Sinaptic Remoto" verificacion.txt
+            grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" verificacion.txt
+            grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" verificacion.txt
+          }
+          firmar SalidaSinaptic/sin-firmar-completo.apk "SalidaSinaptic/SinapticRemoto-${{ env.SINAPTIC_VERSION }}-aarch64.apk"
+          firmar SalidaSinaptic/sin-firmar-cliente.apk "SalidaSinaptic/SinapticRemoto-Cliente-${{ env.SINAPTIC_VERSION }}-aarch64.apk"
+          rm -f "$KS"
           sha256sum SalidaSinaptic/*.apk
+
+      - name: Revisar el manifiesto final de los APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          BT=$(ls "$SDK/build-tools" | sort -V | tail -n 1)
+          AAPT2="$SDK/build-tools/$BT/aapt2"
+          mkdir -p Manifiestos
+          for V in completo cliente; do
+            if [ "$V" = cliente ]; then
+              APK="SalidaSinaptic/SinapticRemoto-Cliente-${{ env.SINAPTIC_VERSION }}-aarch64.apk"
+            else
+              APK="SalidaSinaptic/SinapticRemoto-${{ env.SINAPTIC_VERSION }}-aarch64.apk"
+            fi
+            echo "===== $V: $APK ====="
+            "$AAPT2" dump badging "$APK" | grep -E "^(package|application-label|application:|launchable-activity)" | tee "Manifiestos/$V-badging.txt"
+            "$AAPT2" dump permissions "$APK" | tee "Manifiestos/$V-permisos.txt"
+            "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > "Manifiestos/$V-manifiesto.txt"
+            grep -E "E: (service|receiver|activity|provider)" -A3 "Manifiestos/$V-manifiesto.txt" | grep -E "A: android:name|E: " || true
+          done
+          # La variante cliente NO puede llevar nada del lado host.
+          grep -q "name='co.sinaptic.remoto.cliente'" Manifiestos/cliente-badging.txt
+          grep -q "name='co.sinaptic.remoto'" Manifiestos/completo-badging.txt
+          prohibido='BIND_ACCESSIBILITY_SERVICE|android.accessibilityservice|MEDIA_PROJECTION|MainService|InputService|FloatingWindowService|BootReceiver|SYSTEM_ALERT_WINDOW|RECORD_AUDIO|RECEIVE_BOOT_COMPLETED|BIND_NOTIFICATION_LISTENER_SERVICE|READ_SMS|RECEIVE_SMS|SEND_SMS|REQUEST_INSTALL_PACKAGES|QUERY_ALL_PACKAGES|MANAGE_EXTERNAL_STORAGE|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE'
+          if grep -E "$prohibido" Manifiestos/cliente-permisos.txt Manifiestos/cliente-manifiesto.txt; then
+            echo "::error::El APK cliente todavía declara permisos o servicios del lado host"; exit 1
+          fi
+          echo "APK cliente limpio: sin accesibilidad, sin captura de pantalla, sin permisos sensibles."
+
+      - name: Subir manifiestos revisados
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: manifiestos-android
+          path: Manifiestos/
 
       - name: Upload apk
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -440,7 +493,9 @@ jobs:
             - Idioma por defecto: español
             - Colores e iconos de Sinaptic (morado #6332F9); el color se puede cambiar en Ajustes → «Color de la app»
 
-            Android: id de aplicación propio `co.sinaptic.remoto` (se instala junto a RustDesk oficial) y APK firmado con la llave propia de Sinaptic (v1, v2 y v3).
+            Android, dos APK firmados con la llave propia de Sinaptic (v1, v2 y v3); se pueden tener los dos a la vez:
+            - `SinapticRemoto-${{ env.SINAPTIC_VERSION }}-aarch64.apk` (completo, `co.sinaptic.remoto`): controla otros equipos y también se deja controlar (pide accesibilidad y captura de pantalla).
+            - `SinapticRemoto-Cliente-${{ env.SINAPTIC_VERSION }}-aarch64.apk` («Sinaptic Remoto Cliente», `co.sinaptic.remoto.cliente`): SOLO controla otros equipos. No declara el servicio de accesibilidad, ni la captura de pantalla, ni micrófono, ni ventana flotante, que es lo que hace que Play Protect bloquee la instalación desde el navegador.
             Windows: el .exe todavía no lleva firma de código.
             Código fuente: rama `sinaptic` de este repositorio. Basado en https://github.com/rustdesk/rustdesk (créditos y licencia AGPL-3.0 intactos).
           files: |

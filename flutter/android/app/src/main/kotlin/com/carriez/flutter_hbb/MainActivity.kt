@@ -643,7 +643,11 @@ class MainActivity : FlutterActivity() {
                 GET_VALUE -> {
                     if (call.arguments is String) {
                         if (call.arguments == KEY_IS_SUPPORT_VOICE_CALL) {
-                            result.success(isSupportVoiceCall())
+                            // Sinaptic Remoto Cliente no declara RECORD_AUDIO: sin llamada de voz.
+                            result.success(
+                                isSupportVoiceCall() &&
+                                    !resources.getBoolean(R.bool.sinaptic_solo_cliente)
+                            )
                         } else {
                             result.error("-1", "No such key", null)
                         }

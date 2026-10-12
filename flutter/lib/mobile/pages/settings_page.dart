@@ -288,7 +288,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     Provider.of<FfiModel>(context);
-    final outgoingOnly = bind.isOutgoingOnly();
+    final outgoingOnly = bind.isOutgoingOnly() || kSinapticSoloCliente;
     final incomingOnly = bind.isIncomingOnly();
     final customClientSection = CustomSettingsSection(
         child: Column(
@@ -766,7 +766,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 onPressed: (context) {
                   changeSocks5Proxy();
                 }),
-          if (isAndroid && !bind.isOutgoingOnly())
+          if (isAndroid && !outgoingOnly)
             SettingsTile(
                 title: Text(translate('Deploy')),
                 leading: Icon(Icons.cloud_upload),

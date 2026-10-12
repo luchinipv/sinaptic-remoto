@@ -2387,6 +2387,20 @@ pub fn apply_sinaptic_defaults() {
         .insert(keys::OPTION_LANGUAGE.to_owned(), SINAPTIC_DEFAULT_LANG.to_owned());
 }
 
+// Sinaptic Remoto Cliente (Android, variante «cliente»): Flutter la marca pasando este
+// texto como `custom_client_config` a `main_init`. Pone el modo «solo saliente» de
+// RustDesk (conn-type=outgoing), que ya esconde en la interfaz todo lo del lado host
+// (pestañas Compartir pantalla y Chat del servidor, seguridad, mejoras, 2FA…) y no
+// registra el equipo para recibir conexiones.
+pub const SINAPTIC_MARCA_SOLO_CLIENTE: &str = "sinaptic-solo-cliente";
+
+pub fn apply_sinaptic_solo_cliente() {
+    config::HARD_SETTINGS
+        .write()
+        .unwrap()
+        .insert("conn-type".to_owned(), "outgoing".to_owned());
+}
+
 pub fn load_custom_client() {
     apply_sinaptic_defaults();
     #[cfg(debug_assertions)]

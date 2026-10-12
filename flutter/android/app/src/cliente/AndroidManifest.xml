@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sinaptic Remoto Cliente: solo controla otros equipos; nadie puede controlar este teléfono.
+  Este manifiesto se mezcla encima de src/main y QUITA todo lo del lado «host»:
+  - InputService (servicio de accesibilidad, BIND_ACCESSIBILITY_SERVICE): Play Protect
+    bloquea las apps instaladas fuera de la tienda que lo declaran.
+  - MainService (captura de pantalla con MediaProjection, micrófono) y sus permisos.
+  - FloatingWindowService y SYSTEM_ALERT_WINDOW (ventana flotante del host).
+  - BootReceiver y RECEIVE_BOOT_COMPLETED (arrancar el host al encender).
+  - RECORD_AUDIO (la llamada de voz queda desactivada en esta variante).
+  - REQUEST_IGNORE_BATTERY_OPTIMIZATIONS (solo lo pide el host).
+  Se conservan INTERNET, red, notificaciones y el servicio en primer plano
+  ClientKeepAliveService (tipo specialUse), que mantiene la sesión en segundo plano.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" tools:node="remove" />
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove" />
+
+    <application>
+        <receiver
+            android:name="com.carriez.flutter_hbb.BootReceiver"
+            tools:node="remove" />
+
+        <service
+            android:name="com.carriez.flutter_hbb.InputService"
+            tools:node="remove" />
+
+        <service
+            android:name="com.carriez.flutter_hbb.MainService"
+            tools:node="remove" />
+
+        <service
+            android:name="com.carriez.flutter_hbb.FloatingWindowService"
+            tools:node="remove" />
+    </application>
+
+</manifest>

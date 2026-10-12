@@ -4,6 +4,14 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 
+/// Sinaptic Remoto Cliente (Android, variante «cliente» de Gradle): solo controla
+/// otros equipos. Se compila con --dart-define=SINAPTIC_SOLO_CLIENTE=true.
+const bool kSinapticSoloCliente = bool.fromEnvironment('SINAPTIC_SOLO_CLIENTE');
+
+/// Texto que avisa a Rust (main_init) de que es la variante solo cliente;
+/// igual a SINAPTIC_MARCA_SOLO_CLIENTE de src/common.rs.
+const String kSinapticMarcaSoloCliente = 'sinaptic-solo-cliente';
+
 const int kMaxVirtualDisplayCount = 4;
 const int kAllVirtualDisplay = -1;
 

@@ -29,7 +29,7 @@
     <application
         android:name=".MainApplication"
         android:icon="@mipmap/ic_launcher"
-        android:label="Sinaptic Remoto"
+        android:label="${etiquetaApp}"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true">
 
@@ -65,6 +65,7 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|navigation"
             android:exported="true"
             android:hardwareAccelerated="true"
+            android:label="${etiquetaLanzador}"
             android:launchMode="singleTop"
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize">

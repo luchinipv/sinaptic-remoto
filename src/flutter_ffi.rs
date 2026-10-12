@@ -48,6 +48,10 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
     // core_main's load_custom_client does not work for flutter since it is only applied to its load_library in main.c
     if custom_client_config.is_empty() {
         crate::load_custom_client();
+    } else if custom_client_config == crate::common::SINAPTIC_MARCA_SOLO_CLIENTE {
+        // Sinaptic Remoto Cliente: valores propios + modo solo saliente.
+        crate::load_custom_client();
+        crate::common::apply_sinaptic_solo_cliente();
     } else {
         crate::read_custom_client(custom_client_config);
     }
