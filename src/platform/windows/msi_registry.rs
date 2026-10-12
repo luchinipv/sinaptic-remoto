@@ -87,7 +87,11 @@ pub(super) fn is_matching_entry(
     }
 
     match entry.get_value::<String, _>(REG_NAME_DISPLAY_NAME) {
-        Ok(display_name) => Ok(display_name.eq_ignore_ascii_case(app_name)),
+        // Sinaptic: el MSI se muestra como «Sinaptic Remoto» (ProductName) y APP_NAME es
+        // «SinapticRemoto»; se comparan sin espacios para que la entrada siga casando.
+        Ok(display_name) => Ok(display_name
+            .replace(' ', "")
+            .eq_ignore_ascii_case(&app_name.replace(' ', ""))),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => bail!(
             "Failed to read {REG_NAME_DISPLAY_NAME} from MSI uninstall entry {key_name}: {err}"

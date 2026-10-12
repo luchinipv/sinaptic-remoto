@@ -1,10 +1,12 @@
 # Compilación de Sinaptic Remoto (fork de RustDesk 1.5.0, AGPL-3.0).
-# Solo Windows x64 (.exe autoinstalable) y Android arm64 (.apk firmado con la llave propia
-# «sinaptic-remoto», secretos ANDROID_*; sin ellos el workflow falla, no cae a la de depuración).
+# Solo Windows x64 (.exe autoinstalable e instalador .msi) y Android arm64 (.apk firmado con
+# la llave propia «sinaptic-remoto», secretos ANDROID_*; sin ellos el workflow falla, no cae a
+# la de depuración).
 # Android sale en dos variantes de Gradle: «completo» (co.sinaptic.remoto) y «cliente»
 # (co.sinaptic.remoto.cliente, solo controla; sin accesibilidad ni captura de pantalla).
+# El MSI sale del proyecto WiX de res/msi como en el workflow oficial (ver res/msi/README.md).
 # Derivado de flutter-build.yml / bridge.yml, sin pasos que piden secretos de RustDesk
-# (firma de código, subida a sus servidores, MSI, ventana TopMost).
+# (firma de código, subida a sus servidores, plantilla MSI, ventana TopMost). Sin firma de código.
 name: Sinaptic Remoto - compilar
 
 on:
@@ -17,7 +19,7 @@ on:
       etiqueta:
         description: "Etiqueta de la Release"
         type: string
-        default: "sinaptic-1.5.0-5"
+        default: "sinaptic-1.5.0-6"
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -32,7 +34,10 @@ env:
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VERSION: "1.5.0"
   # Versión de Sinaptic Remoto (nombre de archivos); va a la par de flutter/pubspec.yaml
-  SINAPTIC_VERSION: "1.5.0-5"
+  SINAPTIC_VERSION: "1.5.0-6"
+  # UpgradeCode del MSI: FIJO PARA SIEMPRE (generado una vez el 12/10/2026). Con él cada MSI
+  # nuevo reemplaza al anterior (MajorUpgrade). No cambiarlo. Ver res/msi/README.md.
+  SINAPTIC_MSI_UPGRADE_CODE: "278B8821-BA28-449A-89A9-DAAB79021808"
   NDK_VERSION: "r28c"
 
 jobs:
@@ -243,7 +248,164 @@ jobs:
           mv ./target/release/rustdesk-portable-packer.exe ./SalidaSinaptic/SinapticRemoto-${{ env.SINAPTIC_VERSION }}-x86_64.exe
           sha256sum ./SalidaSinaptic/*.exe
 
-      - name: Probar la instalación en el runner
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+      - name: Construir el instalador MSI
+        # Igual que «Build msi» del workflow oficial (proyecto WiX v4 de res/msi + acciones
+        # personalizadas en C++), con la marca Sinaptic. preprocess.py toma ./rustdesk, que ya
+        # trae SinapticRemoto.exe (renombrado en el paso anterior), y con --app-name lo instala
+        # en C:\Program Files\SinapticRemoto con el servicio SinapticRemoto.
+        shell: pwsh
+        run: |
+          pushd ./res/msi
+          python preprocess.py --arp -d ../../rustdesk `
+            --app-name SinapticRemoto --display-name "Sinaptic Remoto" -m Sinaptic `
+            -v "${{ env.SINAPTIC_VERSION }}" --upgrade-code "${{ env.SINAPTIC_MSI_UPGRADE_CODE }}"
+          if ($LASTEXITCODE -ne 0) { throw "preprocess.py falló ($LASTEXITCODE)" }
+          Write-Host "== Includes.wxi generado =="
+          Get-Content ./Package/Includes.wxi | Write-Host
+          nuget restore msi.sln
+          if ($LASTEXITCODE -ne 0) { throw "nuget restore falló ($LASTEXITCODE)" }
+          msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
+          if ($LASTEXITCODE -ne 0) { throw "msbuild falló ($LASTEXITCODE)" }
+          $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
+          if (-not $msi) { throw "No salió Package.msi" }
+          popd
+          Move-Item $msi.FullName "./SalidaSinaptic/SinapticRemoto-${{ env.SINAPTIC_VERSION }}-x86_64.msi"
+          Get-FileHash ./SalidaSinaptic/*.msi -Algorithm SHA256 | Format-List | Out-String | Write-Host
+
+      - name: Probar el MSI en el runner (instalar y desinstalar)
+        # Va antes de la prueba del .exe: el MSI se niega a instalar encima de una copia
+        # autoinstalada, y así la prueba del .exe comprueba de paso que el MSI no dejó restos.
+        id: prueba_msi
+        continue-on-error: true
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem ./SalidaSinaptic/SinapticRemoto-*.msi | Select-Object -First 1).FullName
+          $codigoEsperado = '{${{ env.SINAPTIC_MSI_UPGRADE_CODE }}}'
+          $versionEsperada = '${{ env.SINAPTIC_VERSION }}'.Replace('-', '.')
+          $dir = 'C:\Program Files\SinapticRemoto'
+          $exe = "$dir\SinapticRemoto.exe"
+          $menu = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\SinapticRemoto"
+          $lnkMenu = "$menu\SinapticRemoto.lnk"
+          $lnkDesinstalar = "$menu\Uninstall SinapticRemoto.lnk"
+          $lnkEscritorio = "$env:PUBLIC\Desktop\SinapticRemoto.lnk"
+          $lnkInicio = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\SinapticRemoto Tray.lnk"
+          $registros = (New-Item -ItemType Directory -Force -Path ./RegistrosMsi).FullName
+          $fallos = [System.Collections.Generic.List[string]]::new()
+          $resumen = [System.Collections.Generic.List[string]]::new()
+          function Fallo($t) { Write-Host "::error::$t"; $fallos.Add($t) }
+          function Bien($t) { Write-Host "OK  $t"; $resumen.Add("OK: $t") }
+          function Com($o, $nombre, $tipo, $a) { $o.GetType().InvokeMember($nombre, $tipo, $null, $o, $a) }
+          $wi = New-Object -ComObject WindowsInstaller.Installer
+          function PropiedadMsi($prop) {
+            $db = Com $wi 'OpenDatabase' 'InvokeMethod' @($msi, 0)
+            $vista = Com $db 'OpenView' 'InvokeMethod' @("SELECT Value FROM Property WHERE Property='$prop'")
+            Com $vista 'Execute' 'InvokeMethod' $null | Out-Null
+            $fila = Com $vista 'Fetch' 'InvokeMethod' $null
+            $valor = if ($fila) { Com $fila 'StringData' 'GetProperty' @(1) } else { $null }
+            Com $vista 'Close' 'InvokeMethod' $null | Out-Null
+            [void][Runtime.InteropServices.Marshal]::ReleaseComObject($vista)
+            [void][Runtime.InteropServices.Marshal]::ReleaseComObject($db)
+            $valor
+          }
+          function Relacionados() { @(Com $wi 'RelatedProducts' 'GetProperty' @($codigoEsperado)) }
+          function Destino($lnk) {
+            $l = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+            [pscustomobject]@{ Destino = $l.TargetPath; Argumentos = $l.Arguments; Carpeta = $l.WorkingDirectory }
+          }
+          function EntradaArp() {
+            Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+              Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Sinaptic Remoto' }
+          }
+          function EstadoServicio() { (sc.exe query SinapticRemoto | Out-String) }
+
+          Write-Host "== Propiedades del MSI: $msi =="
+          $p = @{}
+          foreach ($n in 'ProductName', 'Manufacturer', 'ProductVersion', 'UpgradeCode', 'ProductCode') {
+            $p[$n] = PropiedadMsi $n; Write-Host ("{0,-15} {1}" -f $n, $p[$n])
+          }
+          if ($p.ProductName -ne 'Sinaptic Remoto') { Fallo "ProductName es '$($p.ProductName)'" } else { Bien "ProductName = Sinaptic Remoto" }
+          if ($p.Manufacturer -ne 'Sinaptic') { Fallo "Manufacturer es '$($p.Manufacturer)'" } else { Bien "Manufacturer = Sinaptic" }
+          if ($p.ProductVersion -ne $versionEsperada) { Fallo "ProductVersion es '$($p.ProductVersion)', se esperaba $versionEsperada" } else { Bien "ProductVersion = $versionEsperada" }
+          if ($p.UpgradeCode -ne $codigoEsperado) { Fallo "UpgradeCode es '$($p.UpgradeCode)', se esperaba $codigoEsperado" } else { Bien "UpgradeCode = $codigoEsperado" }
+
+          Write-Host "== Instalar: msiexec /i /qn =="
+          $pr = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$registros\instalar.log`"") -Wait -PassThru
+          Write-Host "msiexec /i terminó con código $($pr.ExitCode)"
+          if ($pr.ExitCode -notin 0, 3010) { Fallo "msiexec /i devolvió $($pr.ExitCode)" } else { Bien "msiexec /i /qn código $($pr.ExitCode)" }
+          $q = ''
+          for ($i = 0; $i -lt 30; $i++) { $q = EstadoServicio; if ($q -match 'RUNNING') { break }; Start-Sleep -Seconds 2 }
+          Write-Host "== Contenido de $dir =="
+          Get-ChildItem $dir -ErrorAction SilentlyContinue | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+          $qc = sc.exe qc SinapticRemoto | Out-String
+          Write-Host $qc; Write-Host $q
+          if (Test-Path $exe) { Bien "existe $exe" } else { Fallo "No quedó $exe" }
+          if (Test-Path "$dir\rustdesk.exe") { Fallo "Sobra $dir\rustdesk.exe" }
+          if ($q -match 'RUNNING') { Bien "servicio SinapticRemoto RUNNING" } else { Fallo "El servicio SinapticRemoto no está en marcha" }
+          if ($qc -match [regex]::Escape("`"$exe`" --service")) { Bien "el servicio ejecuta `"$exe`" --service" } else { Fallo "La ruta del servicio no es `"$exe`" --service" }
+          Write-Host "== Accesos directos =="
+          foreach ($par in @(
+              @($lnkMenu, $exe, ''),
+              @($lnkEscritorio, $exe, ''),
+              @($lnkInicio, $exe, '--tray'),
+              @($lnkDesinstalar, 'msiexec.exe', "/x $($p.ProductCode)"))) {
+            $lnk, $dest, $args0 = $par
+            if (-not (Test-Path $lnk)) { Fallo "No existe el acceso directo $lnk"; continue }
+            $d = Destino $lnk
+            Write-Host "$lnk -> $($d.Destino) $($d.Argumentos)"
+            $destOk = if ($dest -eq 'msiexec.exe') { $d.Destino -like '*\msiexec.exe' } else { $d.Destino -eq $dest }
+            if ($destOk -and $d.Argumentos.Trim() -eq $args0) { Bien "$(Split-Path $lnk -Leaf) -> $($d.Destino) $($d.Argumentos)" } else { Fallo "$lnk apunta a '$($d.Destino) $($d.Argumentos)', se esperaba '$dest $args0'" }
+          }
+          Write-Host "== Programas y características =="
+          $arp = EntradaArp
+          $arp | Select-Object PSChildName, DisplayName, DisplayVersion, Publisher, InstallLocation, WindowsInstaller | Format-List | Out-String | Write-Host
+          if (@($arp).Count -ne 1) { Fallo "Se esperaba una entrada «Sinaptic Remoto» en Programas, hay $(@($arp).Count)" }
+          elseif ($arp.Publisher -ne 'Sinaptic' -or $arp.DisplayVersion -ne $versionEsperada) { Fallo "Entrada de Programas: editor '$($arp.Publisher)', versión '$($arp.DisplayVersion)'" }
+          else { Bien "Programas: Sinaptic Remoto $($arp.DisplayVersion), editor Sinaptic" }
+          $estado = Get-ItemProperty 'HKLM:\SOFTWARE\SinapticRemoto\InstallState\SinapticRemoto' -ErrorAction SilentlyContinue
+          if ($estado.MsiProductCode -eq $p.ProductCode -and $estado.WindowsInstaller -eq 1) { Bien "InstallState de la app con MsiProductCode $($estado.MsiProductCode)" } else { Fallo "InstallState de la app no tiene el ProductCode del MSI" }
+          $rel = Relacionados
+          Write-Host "Productos con el UpgradeCode: $($rel -join ', ')"
+          if ($rel -contains $p.ProductCode) { Bien "Windows Installer encuentra el producto por el UpgradeCode" } else { Fallo "El UpgradeCode no lleva al producto instalado" }
+
+          Write-Host "== Desinstalar: msiexec /x /qn =="
+          $pr = Start-Process msiexec.exe -ArgumentList @('/x', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$registros\desinstalar.log`"") -Wait -PassThru
+          Write-Host "msiexec /x terminó con código $($pr.ExitCode)"
+          if ($pr.ExitCode -notin 0, 3010) { Fallo "msiexec /x devolvió $($pr.ExitCode)" } else { Bien "msiexec /x /qn código $($pr.ExitCode)" }
+          for ($i = 0; $i -lt 15; $i++) { $q = EstadoServicio; if ($q -match '1060') { break }; Start-Sleep -Seconds 2 }
+          Write-Host $q
+          if ($q -match '1060') { Bien "servicio SinapticRemoto eliminado" } else { Fallo "El servicio SinapticRemoto sigue registrado" }
+          if (Test-Path $dir) {
+            Get-ChildItem $dir -Recurse -Force | Select-Object FullName | Out-String | Write-Host
+            Fallo "Quedó la carpeta $dir"
+          } else { Bien "carpeta $dir eliminada" }
+          foreach ($lnk in $lnkMenu, $lnkDesinstalar, $lnkEscritorio, $lnkInicio) { if (Test-Path $lnk) { Fallo "Quedó el acceso directo $lnk" } }
+          if (Test-Path $menu) { Fallo "Quedó la carpeta del menú $menu" }
+          if (-not ($fallos | Where-Object { $_ -like 'Quedó*' })) { Bien "accesos directos y carpeta del menú eliminados" }
+          if (EntradaArp) { Fallo "Sigue la entrada «Sinaptic Remoto» en Programas" } else { Bien "entrada de Programas eliminada" }
+          if (@(Relacionados).Count -gt 0) { Fallo "Windows Installer aún ve productos con el UpgradeCode" }
+          $vivos = Get-Process SinapticRemoto -ErrorAction SilentlyContinue
+          if ($vivos) { Fallo "Siguen procesos SinapticRemoto.exe: $($vivos.Id -join ', ')" } else { Bien "sin procesos SinapticRemoto.exe" }
+
+          $md = @('### Prueba del MSI (instalar y desinstalar con /qn)', '') + ($resumen | ForEach-Object { "- $_" }) + ($fallos | ForEach-Object { "- FALLO: $_" })
+          $md -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if ($fallos.Count -gt 0) { throw "Prueba del MSI con $($fallos.Count) fallo(s): $($fallos -join ' | ')" }
+          Write-Host "Prueba del MSI correcta: instala, arranca el servicio, accesos directos bien y desinstala limpio."
+          exit 0
+
+      - name: Subir registros de msiexec
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: registros-msi
+          path: ./RegistrosMsi/
+          if-no-files-found: ignore
+
+      - name: Probar la instalación del .exe en el runner
         continue-on-error: true
         timeout-minutes: 10
         shell: pwsh
@@ -277,11 +439,14 @@ jobs:
           if ($q -notmatch 'RUNNING') { throw "El servicio SinapticRemoto no está en marcha" }
           Write-Host "Instalación correcta: SinapticRemoto.exe existe y el servicio está en marcha."
 
-      - name: Upload exe
+      - name: Upload exe y msi
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sinaptic-remoto-windows-x86_64
-          path: ./SalidaSinaptic/SinapticRemoto-*.exe
+          if-no-files-found: error
+          path: |
+            ./SalidaSinaptic/SinapticRemoto-*.exe
+            ./SalidaSinaptic/SinapticRemoto-*.msi
 
   build-android-arm64:
     needs: [generate-bridge]
@@ -539,7 +704,9 @@ jobs:
             Android, dos APK firmados con la llave propia de Sinaptic (v1, v2 y v3); se pueden tener los dos a la vez:
             - `SinapticRemoto-${{ env.SINAPTIC_VERSION }}-aarch64.apk` (completo, `co.sinaptic.remoto`): controla otros equipos y también se deja controlar (pide accesibilidad y captura de pantalla).
             - `SinapticRemoto-Cliente-${{ env.SINAPTIC_VERSION }}-aarch64.apk` («Sinaptic Remoto Cliente», `co.sinaptic.remoto.cliente`): SOLO controla otros equipos. No declara el servicio de accesibilidad, ni la captura de pantalla, ni micrófono, ni ventana flotante, que es lo que hace que Play Protect bloquee la instalación desde el navegador.
-            Windows: el .exe todavía no lleva firma de código.
+            Windows, dos instaladores (todavía sin firma de código: SmartScreen avisa):
+            - `SinapticRemoto-${{ env.SINAPTIC_VERSION }}-x86_64.msi` (nuevo): instalador MSI para todos los usuarios en `C:\Program Files\SinapticRemoto`, deja el servicio `SinapticRemoto` en marcha y crea los accesos directos (menú Inicio, escritorio, bandeja al iniciar sesión). Admite instalación silenciosa (`msiexec /i SinapticRemoto-${{ env.SINAPTIC_VERSION }}-x86_64.msi /qn`) y despliegue por GPO/Intune. Las versiones siguientes del MSI se instalan encima y reemplazan a la anterior. Si el equipo tiene la copia instalada con el `.exe`, hay que desinstalarla antes.
+            - `SinapticRemoto-${{ env.SINAPTIC_VERSION }}-x86_64.exe`: autoinstalable (también funciona sin instalar).
             Código fuente: rama `sinaptic` de este repositorio. Basado en https://github.com/rustdesk/rustdesk (créditos y licencia AGPL-3.0 intactos).
           files: |
             ./salida/*

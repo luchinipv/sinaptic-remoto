@@ -25,17 +25,18 @@ g_arpsystemcomponent = {
         "t": "string",
         "v": "!(loc.AR_Comment)",
     },
+    # Sinaptic: enlaces del fork (código fuente AGPL de Sinaptic Remoto).
     "Contact": {
         "msi": "ARPCONTACT",
-        "v": "https://github.com/rustdesk/rustdesk",
+        "v": "https://github.com/luchinipv/sinaptic-remoto",
     },
     "HelpLink": {
         "msi": "ARPHELPLINK",
-        "v": "https://github.com/rustdesk/rustdesk/issues/",
+        "v": "https://github.com/luchinipv/sinaptic-remoto/issues/",
     },
     "ReadMe": {
         "msi": "ARPREADME",
-        "v": "https://github.com/rustdesk/rustdesk",
+        "v": "https://github.com/luchinipv/sinaptic-remoto",
     },
 }
 
@@ -95,6 +96,22 @@ def make_parser():
         type=str,
         default="Purslane Tech Pte. Ltd.",
         help="The app manufacturer.",
+    )
+    # Sinaptic: nombre visible (Programas y características, ventanas del instalador)
+    # distinto del nombre interno --app-name, que fija carpeta, servicio y ejecutable.
+    parser.add_argument(
+        "--display-name",
+        type=str,
+        default="",
+        help="Nombre visible del producto (por defecto, --app-name).",
+    )
+    # Sinaptic: UpgradeCode fijo pasado desde el workflow, para que cada versión nueva
+    # del MSI reemplace a la anterior. Si se omite, se deriva del nombre como antes.
+    parser.add_argument(
+        "--upgrade-code",
+        type=str,
+        default="",
+        help="UpgradeCode fijo del producto (GUID). Por defecto se deriva de --app-name.",
     )
     return parser
 
@@ -243,14 +260,19 @@ def put_app_exe_on_media2():
 
 def gen_pre_vars(args, dist_dir):
     def func(lines, index_start):
-        upgrade_code = uuid.uuid5(uuid.NAMESPACE_OID, app_name + ".exe")
+        if args.upgrade_code:
+            upgrade_code = str(uuid.UUID(args.upgrade_code)).upper()
+        else:
+            upgrade_code = uuid.uuid5(uuid.NAMESPACE_OID, app_name + ".exe")
+        display_name = args.display_name or args.app_name
 
         indent = g_indent_unit * 1
         to_insert_lines = [
             f'{indent}<?define Version="{g_version}" ?>\n',
             f'{indent}<?define Manufacturer="{args.manufacturer}" ?>\n',
             f'{indent}<?define Product="{args.app_name}" ?>\n',
-            f'{indent}<?define Description="{args.app_name} Installer" ?>\n',
+            f'{indent}<?define DisplayName="{display_name}" ?>\n',
+            f'{indent}<?define Description="{display_name} Installer" ?>\n',
             f'{indent}<?define ProductLower="{args.app_name.lower()}" ?>\n',
             f'{indent}<?define RegKeyRoot=".$(var.ProductLower)" ?>\n',
             f'{indent}<?define RegKeyInstall="$(var.RegKeyRoot)\\Install" ?>\n',
