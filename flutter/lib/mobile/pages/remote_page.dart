@@ -632,11 +632,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _composerBarra(BuildContext context) {
-    final mq = MediaQuery.of(context);
-    // Alto que queda para la imagen (con el teclado abierto, mucho menos):
-    // la barra no pasa de ~1/5 de ese alto.
-    final disponible = mq.size.height - mq.viewInsets.bottom;
+  Widget _composerBarra(double disponible) {
+    // disponible = alto real del visor (el Scaffold lo encoge con el teclado
+    // abierto). La barra no pasa de ~1/5 de ese alto.
     final maxLineas = disponible < 260 ? 1 : (disponible < 420 ? 2 : 3);
     const cian = Color(0xFF00D2FF);
     const radio = Radius.circular(12);
@@ -781,9 +779,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  List<Widget> _composerCapas(BuildContext context) {
+  List<Widget> _composerCapas(double disponible) {
     if (!_composerOpen) return const [];
-    return [_composerMin ? _composerBurbuja() : _composerBarra(context)];
+    return [_composerMin ? _composerBurbuja() : _composerBarra(disponible)];
   }
 
   Widget _bottomWidget() => _showGestureHelp
@@ -857,45 +855,51 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       : Offstage(),
                 ],
               )),
-          body: Stack(children: [
-            Positioned.fill(
-                child: Obx(
-              () => getRawPointerAndKeyBody(Overlay(
-                initialEntries: [
-                  OverlayEntry(builder: (context) {
-                    return Container(
-                      color: kColorCanvas,
-                      child: isWebDesktop
-                          ? getBodyForDesktopWithListener()
-                          : SafeArea(
-                              child: OrientationBuilder(
-                                  builder: (ctx, orientation) {
-                                if (_currentOrientation != orientation) {
-                                  Timer(const Duration(milliseconds: 200), () {
-                                    gFFI.dialogManager
-                                        .resetMobileActionsOverlay(ffi: gFFI);
-                                    _currentOrientation = orientation;
-                                    gFFI.canvasModel.updateViewStyle();
-                                  });
-                                }
-                                return Container(
-                                  color: MyTheme.canvasColor,
-                                  child: inputModel.isPhysicalMouse.value
-                                      ? getBodyForMobile()
-                                      : RawTouchGestureDetectorRegion(
-                                          child: getBodyForMobile(),
-                                          ffi: gFFI,
-                                        ),
-                                );
-                              }),
-                            ),
-                    );
-                  })
-                ],
-              )),
-            )),
-            ..._composerCapas(context),
-          ])),
+          body: LayoutBuilder(
+              builder: (context, cons) => Stack(children: [
+                    Positioned.fill(
+                        child: Obx(
+                      () => getRawPointerAndKeyBody(Overlay(
+                        initialEntries: [
+                          OverlayEntry(builder: (context) {
+                            return Container(
+                              color: kColorCanvas,
+                              child: isWebDesktop
+                                  ? getBodyForDesktopWithListener()
+                                  : SafeArea(
+                                      child: OrientationBuilder(
+                                          builder: (ctx, orientation) {
+                                        if (_currentOrientation !=
+                                            orientation) {
+                                          Timer(
+                                              const Duration(milliseconds: 200),
+                                              () {
+                                            gFFI.dialogManager
+                                                .resetMobileActionsOverlay(
+                                                    ffi: gFFI);
+                                            _currentOrientation = orientation;
+                                            gFFI.canvasModel.updateViewStyle();
+                                          });
+                                        }
+                                        return Container(
+                                          color: MyTheme.canvasColor,
+                                          child: inputModel
+                                                  .isPhysicalMouse.value
+                                              ? getBodyForMobile()
+                                              : RawTouchGestureDetectorRegion(
+                                                  child: getBodyForMobile(),
+                                                  ffi: gFFI,
+                                                ),
+                                        );
+                                      }),
+                                    ),
+                            );
+                          })
+                        ],
+                      )),
+                    )),
+                    ..._composerCapas(cons.maxHeight),
+                  ]))),
     );
   }
 
