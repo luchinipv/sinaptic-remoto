@@ -27,6 +27,9 @@ import '../widgets/custom_scale_widget.dart';
 
 final initText = '1' * 1024;
 
+// Sinaptic Remoto: opción local con el borde de la barra «Redactar» ('Y' = arriba).
+const kOpcionRedactarArriba = 'sinaptic-redactar-arriba';
+
 // Workaround for Android (default input method, Microsoft SwiftKey keyboard) when using physical keyboard.
 // When connecting a physical keyboard, `KeyEvent.physicalKey.usbHidUsage` are wrong is using Microsoft SwiftKey keyboard.
 // https://github.com/flutter/flutter/issues/159384
@@ -88,6 +91,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   // la sesión aunque se cierre la caja sin enviar.
   final TextEditingController _composerController = TextEditingController();
   bool _composerEnterAtEnd = false;
+  final FocusNode _composerFocusNode = FocusNode();
+  bool _composerOpen = false;
+  bool _composerMin = false;
+  // Preferencia local: barra pegada arriba en vez de abajo.
+  bool _composerTop =
+      bind.mainGetLocalOption(key: kOpcionRedactarArriba) == 'Y';
 
   _RemotePageState(String id) {
     initSharedStates(id);
@@ -173,6 +182,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _mobileFocusNode.dispose();
     _physicalFocusNode.dispose();
     _composerController.dispose();
+    _composerFocusNode.dispose();
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
     inputModel.keyboardInputAllowed = true;
@@ -259,6 +269,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    if (_composerActivo) {
+      // La barra «Redactar» maneja su propio teclado: no se bloquea el IME al
+      // ocultarlo (para poder volver a tocar el campo) ni se le roba el foco.
+      if (!visible) {
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      }
+      setState(() {});
+      return;
+    }
     if (!visible) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
@@ -505,104 +524,266 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return true;
   }
 
+  // Sinaptic Remoto: barra «Redactar» compacta (1.5.0-5). Antes era una hoja
+  // modal grande que tapaba la imagen remota; ahora es una barra delgada y
+  // semitransparente pegada abajo (encima del teclado) o arriba, de 1 a 3
+  // líneas, que se puede minimizar a un botón flotante sin perder el texto.
+  // Va fuera de RawKeyFocusScope para que las teclas del campo no se manden
+  // sueltas al equipo remoto.
+  bool get _composerActivo => _composerOpen && !_composerMin;
+
+  void _composerPedirTeclado() {
+    gFFI.invokeMethod("enable_soft_keyboard", true).whenComplete(() {
+      if (!mounted || !_composerActivo) return;
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+          overlays: SystemUiOverlay.values);
+      _composerFocusNode.requestFocus();
+    });
+  }
+
+  void _composerSoltarTeclado() {
+    _composerFocusNode.unfocus();
+    gFFI.invokeMethod("enable_soft_keyboard", false);
+    _physicalFocusNode.requestFocus();
+  }
+
   void openComposer() {
-    setState(() => _showEdit = false);
-    gFFI.invokeMethod("enable_soft_keyboard", true);
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setSheetState) {
-          return Padding(
-            padding: EdgeInsets.only(
-                left: 12,
-                right: 12,
-                top: 12,
-                bottom: MediaQuery.of(ctx).viewInsets.bottom + 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('Redactar y enviar al equipo remoto',
-                    style: Theme.of(ctx).textTheme.titleMedium),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _composerController,
-                  autofocus: true,
-                  keyboardType: TextInputType.multiline,
-                  textCapitalization: TextCapitalization.sentences,
-                  autocorrect: true,
-                  enableSuggestions: true,
-                  minLines: 3,
-                  maxLines: 8,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: 'Escriba aquí; se envía al pulsar «Enviar»',
+    if (_composerActivo) {
+      // El botón de la barra de herramientas abre y cierra.
+      closeComposer();
+      return;
+    }
+    _timer?.cancel();
+    _mobileFocusNode.unfocus();
+    setState(() {
+      _showEdit = false;
+      _composerOpen = true;
+      _composerMin = false;
+    });
+    _composerPedirTeclado();
+  }
+
+  void closeComposer() {
+    setState(() {
+      _composerOpen = false;
+      _composerMin = false;
+    });
+    _composerSoltarTeclado();
+  }
+
+  void _composerMinimizar() {
+    setState(() => _composerMin = true);
+    _composerSoltarTeclado();
+  }
+
+  void _composerRestaurar() {
+    setState(() {
+      _composerOpen = true;
+      _composerMin = false;
+    });
+    _composerPedirTeclado();
+  }
+
+  void _composerPonerArriba(bool arriba) {
+    if (_composerTop == arriba) return;
+    setState(() => _composerTop = arriba);
+    bind.mainSetLocalOption(
+        key: kOpcionRedactarArriba, value: arriba ? 'Y' : '');
+  }
+
+  Future<void> _composerPegar() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final paste = data?.text ?? '';
+    if (paste.isEmpty) return;
+    final value = _composerController.value;
+    final sel = value.selection;
+    final start = sel.isValid ? sel.start : value.text.length;
+    final end = sel.isValid ? sel.end : value.text.length;
+    _composerController.value = TextEditingValue(
+      text: value.text.replaceRange(start, end, paste),
+      selection: TextSelection.collapsed(offset: start + paste.length),
+    );
+  }
+
+  Future<void> _composerEnviar() async {
+    final text = _composerController.text;
+    if (text.isEmpty && !_composerEnterAtEnd) return;
+    final ok = await _composerSend(text, _composerEnterAtEnd);
+    if (ok) {
+      // La barra sigue abierta para escribir lo siguiente.
+      _composerController.clear();
+    }
+  }
+
+  Widget _composerBoton(
+      {required IconData icon,
+      required String tooltip,
+      required VoidCallback onPressed,
+      Color color = Colors.white}) {
+    return IconButton(
+      icon: Icon(icon),
+      iconSize: 20,
+      color: color,
+      tooltip: tooltip,
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+      onPressed: onPressed,
+    );
+  }
+
+  Widget _composerBarra(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    // Alto que queda para la imagen (con el teclado abierto, mucho menos):
+    // la barra no pasa de ~1/5 de ese alto.
+    final disponible = mq.size.height - mq.viewInsets.bottom;
+    final maxLineas = disponible < 260 ? 1 : (disponible < 420 ? 2 : 3);
+    const cian = Color(0xFF00D2FF);
+    const radio = Radius.circular(12);
+    final barra = Material(
+      color: Colors.black.withOpacity(0.6),
+      borderRadius: _composerTop
+          ? BorderRadius.only(bottomLeft: radio, bottomRight: radio)
+          : BorderRadius.only(topLeft: radio, topRight: radio),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            _composerBoton(
+              icon: _composerTop
+                  ? Icons.vertical_align_bottom
+                  : Icons.vertical_align_top,
+              tooltip: _composerTop ? 'Mover abajo' : 'Mover arriba',
+              onPressed: () => _composerPonerArriba(!_composerTop),
+            ),
+            Expanded(
+              child: TextField(
+                controller: _composerController,
+                focusNode: _composerFocusNode,
+                keyboardType: TextInputType.multiline,
+                textCapitalization: TextCapitalization.sentences,
+                autocorrect: true,
+                enableSuggestions: true,
+                minLines: 1,
+                maxLines: maxLineas,
+                style: const TextStyle(color: Colors.white, fontSize: 15),
+                cursorColor: cian,
+                onTap: () => gFFI.invokeMethod("enable_soft_keyboard", true),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.12),
+                  hintText: 'Redactar…',
+                  hintStyle: const TextStyle(color: Colors.white54),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide.none,
                   ),
                 ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('Pulsar Enter al final'),
-                  value: _composerEnterAtEnd,
-                  onChanged: (v) =>
-                      setSheetState(() => _composerEnterAtEnd = v ?? false),
-                ),
-                Wrap(
-                  alignment: WrapAlignment.end,
-                  spacing: 8,
+              ),
+            ),
+            _composerBoton(
+              icon: Icons.keyboard_return,
+              tooltip: _composerEnterAtEnd
+                  ? 'Enter al final: sí'
+                  : 'Enter al final: no',
+              color: _composerEnterAtEnd ? cian : Colors.white38,
+              onPressed: () =>
+                  setState(() => _composerEnterAtEnd = !_composerEnterAtEnd),
+            ),
+            _composerBoton(
+              icon: Icons.content_paste,
+              tooltip: 'Pegar del celular',
+              onPressed: _composerPegar,
+            ),
+            _composerBoton(
+              icon: Icons.backspace_outlined,
+              tooltip: 'Borrar',
+              onPressed: () => _composerController.clear(),
+            ),
+            _composerBoton(
+              icon: Icons.send,
+              tooltip: 'Enviar',
+              color: cian,
+              onPressed: _composerEnviar,
+            ),
+            _composerBoton(
+              icon: Icons.close_fullscreen,
+              tooltip: 'Minimizar',
+              onPressed: _composerMinimizar,
+            ),
+          ],
+        ),
+      ),
+    );
+    return Positioned(
+      left: 0,
+      right: 0,
+      top: _composerTop ? 0 : null,
+      bottom: _composerTop ? null : 0,
+      child: SafeArea(
+        top: _composerTop,
+        bottom: !_composerTop,
+        // Deslizar la barra hacia arriba o abajo la cambia de borde.
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onVerticalDragEnd: (d) {
+            final v = d.primaryVelocity ?? 0;
+            if (v < -200) _composerPonerArriba(true);
+            if (v > 200) _composerPonerArriba(false);
+          },
+          child: barra,
+        ),
+      ),
+    );
+  }
+
+  Widget _composerBurbuja() {
+    return Positioned(
+      left: 8,
+      top: _composerTop ? 8 : null,
+      bottom: _composerTop ? null : 8,
+      child: SafeArea(
+        child: Tooltip(
+          message: 'Redactar (mantener pulsado para cerrar)',
+          child: Material(
+            color: MyTheme.accent.withOpacity(0.75),
+            shape: const CircleBorder(),
+            elevation: 3,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: _composerRestaurar,
+              onLongPress: closeComposer,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Stack(
+                  clipBehavior: Clip.none,
                   children: [
-                    TextButton.icon(
-                      icon: const Icon(Icons.content_paste),
-                      label: const Text('Pegar del celular'),
-                      onPressed: () async {
-                        final data =
-                            await Clipboard.getData(Clipboard.kTextPlain);
-                        final paste = data?.text ?? '';
-                        if (paste.isEmpty) return;
-                        final value = _composerController.value;
-                        final sel = value.selection;
-                        final start = sel.isValid ? sel.start : value.text.length;
-                        final end = sel.isValid ? sel.end : value.text.length;
-                        final newText =
-                            value.text.replaceRange(start, end, paste);
-                        _composerController.value = TextEditingValue(
-                          text: newText,
-                          selection: TextSelection.collapsed(
-                              offset: start + paste.length),
-                        );
-                      },
-                    ),
-                    TextButton.icon(
-                      icon: const Icon(Icons.delete_outline),
-                      label: const Text('Borrar'),
-                      onPressed: () => _composerController.clear(),
-                    ),
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.send),
-                      label: const Text('Enviar'),
-                      onPressed: () async {
-                        final text = _composerController.text;
-                        if (text.isEmpty && !_composerEnterAtEnd) return;
-                        final ok = await _composerSend(text, _composerEnterAtEnd);
-                        if (ok) {
-                          _composerController.clear();
-                          if (ctx.mounted) Navigator.of(ctx).pop();
-                        }
-                      },
-                    ),
+                    const Icon(Icons.edit_note, color: Colors.white, size: 22),
+                    // Punto cian si quedó texto sin enviar.
+                    if (_composerController.text.isNotEmpty)
+                      const Positioned(
+                        right: -2,
+                        top: -2,
+                        child: CircleAvatar(
+                            radius: 4, backgroundColor: Color(0xFF00D2FF)),
+                      ),
                   ],
                 ),
-              ],
+              ),
             ),
-          );
-        });
-      },
-    ).whenComplete(() {
-      if (!mounted) return;
-      gFFI.invokeMethod("enable_soft_keyboard", false);
-      _physicalFocusNode.requestFocus();
-    });
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _composerCapas(BuildContext context) {
+    if (!_composerOpen) return const [];
+    return [_composerMin ? _composerBurbuja() : _composerBarra(context)];
   }
 
   Widget _bottomWidget() => _showGestureHelp
@@ -615,10 +796,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final keyboardIsVisible =
         keyboardVisibilityController.isVisible && _showEdit;
-    final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
+    // Con la barra «Redactar» abierta el botón flotante se esconde: quedaría
+    // encima de sus botones.
+    final showActionButton = !_composerActivo &&
+        (!_showBar || keyboardIsVisible || _showGestureHelp);
 
     return WillPopScope(
       onWillPop: () async {
+        if (_composerActivo) {
+          // Atrás con la barra abierta la minimiza en vez de cerrar la sesión.
+          _composerMinimizar();
+          return false;
+        }
         clientClose(sessionId, gFFI);
         return false;
       },
@@ -668,41 +857,45 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       : Offstage(),
                 ],
               )),
-          body: Obx(
-            () => getRawPointerAndKeyBody(Overlay(
-              initialEntries: [
-                OverlayEntry(builder: (context) {
-                  return Container(
-                    color: kColorCanvas,
-                    child: isWebDesktop
-                        ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
-                                OrientationBuilder(builder: (ctx, orientation) {
-                              if (_currentOrientation != orientation) {
-                                Timer(const Duration(milliseconds: 200), () {
-                                  gFFI.dialogManager
-                                      .resetMobileActionsOverlay(ffi: gFFI);
-                                  _currentOrientation = orientation;
-                                  gFFI.canvasModel.updateViewStyle();
-                                });
-                              }
-                              return Container(
-                                color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
-                              );
-                            }),
-                          ),
-                  );
-                })
-              ],
+          body: Stack(children: [
+            Positioned.fill(
+                child: Obx(
+              () => getRawPointerAndKeyBody(Overlay(
+                initialEntries: [
+                  OverlayEntry(builder: (context) {
+                    return Container(
+                      color: kColorCanvas,
+                      child: isWebDesktop
+                          ? getBodyForDesktopWithListener()
+                          : SafeArea(
+                              child: OrientationBuilder(
+                                  builder: (ctx, orientation) {
+                                if (_currentOrientation != orientation) {
+                                  Timer(const Duration(milliseconds: 200), () {
+                                    gFFI.dialogManager
+                                        .resetMobileActionsOverlay(ffi: gFFI);
+                                    _currentOrientation = orientation;
+                                    gFFI.canvasModel.updateViewStyle();
+                                  });
+                                }
+                                return Container(
+                                  color: MyTheme.canvasColor,
+                                  child: inputModel.isPhysicalMouse.value
+                                      ? getBodyForMobile()
+                                      : RawTouchGestureDetectorRegion(
+                                          child: getBodyForMobile(),
+                                          ffi: gFFI,
+                                        ),
+                                );
+                              }),
+                            ),
+                    );
+                  })
+                ],
+              )),
             )),
-          )),
+            ..._composerCapas(context),
+          ])),
     );
   }
 
@@ -850,7 +1043,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
             KeyHelpTools(
                 keyboardIsVisible: keyboardIsVisible,
-                showGestureHelp: _showGestureHelp),
+                showGestureHelp: _showGestureHelp,
+                hideForComposer: _composerActivo),
             SizedBox(
               width: 0,
               height: 0,
@@ -1104,8 +1298,15 @@ class KeyHelpTools extends StatefulWidget {
   /// need to show by external request, etc [keyboardIsVisible] or [changeTouchMode]
   bool get requestShow => keyboardIsVisible || showGestureHelp;
 
+  /// Sinaptic Remoto: con la barra «Redactar» abierta las teclas de ayuda no
+  /// se muestran (ocupaban media pantalla), pero se sigue avisando al lienzo
+  /// de que el teclado está abierto para que centre el cursor.
+  final bool hideForComposer;
+
   KeyHelpTools(
-      {required this.keyboardIsVisible, required this.showGestureHelp});
+      {required this.keyboardIsVisible,
+      required this.showGestureHelp,
+      this.hideForComposer = false});
 
   @override
   State<KeyHelpTools> createState() => _KeyHelpToolsState();
@@ -1162,7 +1363,8 @@ class _KeyHelpToolsState extends State<KeyHelpTools> {
         inputModel.shift ||
         inputModel.command;
 
-    if (!_pin && !hasModifierOn && !widget.requestShow) {
+    if (widget.hideForComposer ||
+        (!_pin && !hasModifierOn && !widget.requestShow)) {
       gFFI.cursorModel
           .keyHelpToolsVisibilityChanged(null, widget.keyboardIsVisible);
       return Offstage();

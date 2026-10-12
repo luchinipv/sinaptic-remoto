@@ -17,7 +17,7 @@ on:
       etiqueta:
         description: "Etiqueta de la Release"
         type: string
-        default: "sinaptic-1.5.0-4"
+        default: "sinaptic-1.5.0-5"
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -32,7 +32,7 @@ env:
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VERSION: "1.5.0"
   # Versión de Sinaptic Remoto (nombre de archivos); va a la par de flutter/pubspec.yaml
-  SINAPTIC_VERSION: "1.5.0-4"
+  SINAPTIC_VERSION: "1.5.0-5"
   NDK_VERSION: "r28c"
 
 jobs:
@@ -532,7 +532,9 @@ jobs:
             - Servidor ID y relé: 185.75.12.74 (puertos 21115-21119)
             - Llave pública del servidor incluida
             - Idioma por defecto: español
-            - Colores e iconos de Sinaptic (morado #6332F9); el color se puede cambiar en Ajustes → «Color de la app»
+            - Icono propio de Sinaptic Remoto: monitor con cursor sobre el morado #6332F9 y el punto cian de la marca (la variante Cliente lleva además un celular delante)
+            - Color de la app morado Sinaptic; se puede cambiar en Ajustes → «Color de la app»
+            - Android: barra «Redactar» compacta (1 a 3 líneas, encima del teclado o arriba, minimizable) que deja ver la pantalla remota
 
             Android, dos APK firmados con la llave propia de Sinaptic (v1, v2 y v3); se pueden tener los dos a la vez:
             - `SinapticRemoto-${{ env.SINAPTIC_VERSION }}-aarch64.apk` (completo, `co.sinaptic.remoto`): controla otros equipos y también se deja controlar (pide accesibilidad y captura de pantalla).
