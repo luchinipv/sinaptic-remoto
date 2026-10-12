@@ -228,13 +228,54 @@ jobs:
         shell: bash
         run: |
           sed -i '/dpiAware/d' res/manifest.xml
+          # El instalador registra el servicio, los accesos directos y el desinstalador con
+          # «<APP_NAME>.exe» (APP_NAME = SinapticRemoto, src/common.rs). Flutter produce
+          # rustdesk.exe: se renombra antes de empaquetar, como los clientes personalizados
+          # oficiales. Sin esto la 1.5.0-3 quedó instalada con rustdesk.exe y un servicio
+          # apuntando a SinapticRemoto.exe, que no existía.
+          mv ./rustdesk/rustdesk.exe ./rustdesk/SinapticRemoto.exe
+          ls -l ./rustdesk
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/SinapticRemoto.exe
           popd
           mkdir -p ./SalidaSinaptic
           mv ./target/release/rustdesk-portable-packer.exe ./SalidaSinaptic/SinapticRemoto-${{ env.SINAPTIC_VERSION }}-x86_64.exe
           sha256sum ./SalidaSinaptic/*.exe
+
+      - name: Probar la instalación en el runner
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem ./SalidaSinaptic/SinapticRemoto-*.exe | Select-Object -First 1
+          Write-Host "Instalando en silencio: $($exe.FullName)"
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList '--silent-install' -PassThru
+          $p | Wait-Process -Timeout 300 -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 30
+          $dir = 'C:\Program Files\SinapticRemoto'
+          Write-Host "== Contenido de $dir =="
+          Get-ChildItem $dir -ErrorAction SilentlyContinue | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+          Write-Host "== Servicio =="
+          sc.exe qc SinapticRemoto | Out-String | Write-Host
+          $q = sc.exe query SinapticRemoto | Out-String
+          Write-Host $q
+          Write-Host "== Menú Inicio =="
+          Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\SinapticRemoto" -ErrorAction SilentlyContinue | ForEach-Object {
+            $l = (New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName)
+            Write-Host "$($_.Name) -> $($l.TargetPath) $($l.Arguments)"
+          }
+          Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup" -ErrorAction SilentlyContinue | ForEach-Object {
+            $l = (New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName)
+            Write-Host "Inicio automático: $($_.Name) -> $($l.TargetPath) $($l.Arguments)"
+          }
+          $log = Get-ChildItem "$env:ProgramData\SinapticRemoto\log" -Recurse -Filter *.log -ErrorAction SilentlyContinue
+          $log += Get-ChildItem "$env:APPDATA\SinapticRemoto\log" -Recurse -Filter *.log -ErrorAction SilentlyContinue
+          foreach ($f in $log) { Write-Host "== $($f.FullName) =="; Get-Content $f.FullName -Tail 30 | Write-Host }
+          if (-not (Test-Path "$dir\SinapticRemoto.exe")) { throw "No quedó $dir\SinapticRemoto.exe" }
+          if (Test-Path "$dir\rustdesk.exe") { throw "Sobra $dir\rustdesk.exe" }
+          if ($q -notmatch 'RUNNING') { throw "El servicio SinapticRemoto no está en marcha" }
+          Write-Host "Instalación correcta: SinapticRemoto.exe existe y el servicio está en marcha."
 
       - name: Upload exe
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

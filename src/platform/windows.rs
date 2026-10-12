@@ -1727,6 +1727,7 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
 chcp 65001
 md \"{path}\"
 {copy_exe}
+{rename_exe}
 reg add {subkey} /f
 reg add {subkey} /f /v DisplayIcon /t REG_SZ /d \"{display_icon}\"
 reg add {subkey} /f /v DisplayName /t REG_SZ /d \"{app_name}\"
@@ -1765,6 +1766,10 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
         sleep = if debug { "timeout 300" } else { "" },
         dels = if debug { "" } else { &dels },
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
+        // Sinaptic Remoto: el servicio, los accesos directos y el desinstalador apuntan a
+        // «<APP_NAME>.exe»; si el ejecutable copiado se llama distinto (p. ej. rustdesk.exe)
+        // se renombra aquí, como ya hace update_me. Si ya se llama así, no hace nada.
+        rename_exe = rename_exe_cmd(&src_exe, &path)?,
         import_config = get_import_config(&exe),
     );
     run_cmds(cmds, debug, "install")?;
