@@ -617,6 +617,12 @@ impl Drop for Server {
 }
 
 pub fn check_zombie() {
+    // Sinaptic Remoto: en Android no hay procesos hijos que vigilar (CHILD_PROCESS solo
+    // se llena en escritorio) y este hilo se despertaba cada 100 ms mientras el
+    // servicio host estuviera encendido.
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        return;
+    }
     std::thread::spawn(|| loop {
         let mut lock = CHILD_PROCESS.lock().unwrap();
         let mut i = 0;
