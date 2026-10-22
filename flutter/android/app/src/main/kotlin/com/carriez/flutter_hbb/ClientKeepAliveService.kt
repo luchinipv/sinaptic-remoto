@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import ffi.FFI
@@ -28,6 +29,11 @@ class ClientKeepAliveService : Service() {
         private const val EXTRA_BACKGROUND = "background"
         // Tiempo que la sesión aguanta en segundo plano antes de cerrarse.
         const val BACKGROUND_TIMEOUT_MS = 10 * 60 * 1000L
+        // Cada cuánto se revisa el plazo. El plazo se mide con elapsedRealtime (cuenta
+        // también el sueño profundo); un solo postDelayed de 10 min usa uptimeMillis,
+        // que se detiene cuando la CPU duerme, y con la pantalla apagada el plazo real
+        // podía alargarse bastante más de 10 min con la sesión abierta.
+        private const val CHECK_INTERVAL_MS = 30 * 1000L
 
         fun update(context: Context, background: Boolean) {
             val intent = Intent(context, ClientKeepAliveService::class.java)
@@ -63,20 +69,33 @@ class ClientKeepAliveService : Service() {
         stopSelf()
     }
 
+    // Momento (en elapsedRealtime) en que vence el plazo en segundo plano.
+    private var deadlineElapsed = 0L
+    private val checkRunnable = object : Runnable {
+        override fun run() {
+            if (SystemClock.elapsedRealtime() >= deadlineElapsed) {
+                timeoutRunnable.run()
+            } else {
+                handler.postDelayed(this, CHECK_INTERVAL_MS)
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         showNotification()
-        handler.removeCallbacks(timeoutRunnable)
+        handler.removeCallbacks(checkRunnable)
         val background = intent?.getBooleanExtra(EXTRA_BACKGROUND, false) ?: false
         if (background) {
-            handler.postDelayed(timeoutRunnable, BACKGROUND_TIMEOUT_MS)
+            deadlineElapsed = SystemClock.elapsedRealtime() + BACKGROUND_TIMEOUT_MS
+            handler.postDelayed(checkRunnable, CHECK_INTERVAL_MS)
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(timeoutRunnable)
+        handler.removeCallbacks(checkRunnable)
         super.onDestroy()
     }
 

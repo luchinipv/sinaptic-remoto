@@ -515,6 +515,12 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg));
     }
 
+    // Sinaptic Remoto: pide un fps al equipo remoto sin guardarlo (save_config = false).
+    pub fn set_custom_fps_temporal(&self, custom_fps: i32) {
+        let msg = self.lc.write().unwrap().set_custom_fps(custom_fps, false);
+        self.send(Data::Message(msg));
+    }
+
     pub fn get_remember(&self) -> bool {
         self.lc.read().unwrap().remember
     }

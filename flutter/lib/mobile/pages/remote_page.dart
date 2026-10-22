@@ -207,12 +207,38 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       trySyncClipboard();
       if (isAndroid) {
         gFFI.invokeMethod("client_keepalive", "foreground");
+        unawaited(_restaurarFpsTrasSegundoPlano());
       }
     } else if (state == AppLifecycleState.paused) {
       if (isAndroid) {
         gFFI.invokeMethod("client_keepalive", "background");
+        _bajarFpsEnSegundoPlano();
       }
     }
+  }
+
+  // Sinaptic Remoto: en segundo plano nadie mira la pantalla remota, pero la sesión
+  // sigue viva hasta 10 min (ClientKeepAliveService) y el equipo remoto seguía
+  // mandando hasta 30 fps que el teléfono decodificaba por software. Se le pide 1 fps
+  // SIN guardarlo en la configuración del equipo, y al volver se repone el fps que
+  // el usuario tenía guardado (o el de siempre).
+  bool _fpsBajadoEnSegundoPlano = false;
+
+  void _bajarFpsEnSegundoPlano() {
+    _fpsBajadoEnSegundoPlano = true;
+    unawaited(bind.sessionSetCustomFpsTemporal(sessionId: sessionId, fps: 1));
+  }
+
+  Future<void> _restaurarFpsTrasSegundoPlano() async {
+    if (!_fpsBajadoEnSegundoPlano) return;
+    _fpsBajadoEnSegundoPlano = false;
+    final guardado =
+        await bind.sessionGetOption(sessionId: sessionId, arg: 'custom-fps');
+    var fps = int.tryParse(guardado ?? '') ?? kDefaultFps.toInt();
+    if (fps < kMinFps || fps > kMaxFps) {
+      fps = kDefaultFps.toInt();
+    }
+    await bind.sessionSetCustomFpsTemporal(sessionId: sessionId, fps: fps);
   }
 
   // For client side

@@ -455,6 +455,12 @@ class RustdeskImpl {
         () => js.context.callMethod('setByName', ['custom-fps', fps]));
   }
 
+  // Sinaptic Remoto: en la web no hay segundo plano que ahorrar; no hace nada.
+  Future<void> sessionSetCustomFpsTemporal(
+      {required UuidValue sessionId, required int fps, dynamic hint}) {
+    return Future.value();
+  }
+
   Future<void> sessionLockScreen({required UuidValue sessionId, dynamic hint}) {
     return Future(() => js.context.callMethod('setByName', ['lock_screen']));
   }
