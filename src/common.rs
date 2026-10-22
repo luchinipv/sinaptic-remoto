@@ -2369,6 +2369,17 @@ pub const SINAPTIC_DEFAULT_LANG: &str = "es";
 pub fn apply_sinaptic_defaults() {
     // Sin espacios: el nombre se usa sin comillas en `sc create` y en el esquema URI.
     *config::APP_NAME.write().unwrap() = SINAPTIC_APP_NAME.to_owned();
+    // Sinaptic Remoto: no usamos la API web de RustDesk (cuentas, libreta de
+    // direcciones, consola). Sin esta marca, get_api_server() la deduce del servidor
+    // propio y, con el servicio host encendido, hbbs_http::sync mandaba un latido HTTP
+    // cada 15 s y la información del equipo cada 2 min; como fallaban, cada intento se
+    // repetía por el proxy TCP del servidor (otra conexión cifrada, hasta 36 s abierta).
+    // Con register-device=N, get_api_server() devuelve "" y no se envía nada.
+    // Si algún día se monta la API, quitar esta marca.
+    config::BUILTIN_SETTINGS
+        .write()
+        .unwrap()
+        .insert(keys::OPTION_REGISTER_DEVICE.to_owned(), "N".to_owned());
     {
         let mut s = config::DEFAULT_SETTINGS.write().unwrap();
         s.insert(
