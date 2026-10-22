@@ -19,7 +19,7 @@ on:
       etiqueta:
         description: "Etiqueta de la Release"
         type: string
-        default: "sinaptic-1.5.0-6"
+        default: "sinaptic-1.5.0-7"
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -34,7 +34,7 @@ env:
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VERSION: "1.5.0"
   # Versión de Sinaptic Remoto (nombre de archivos); va a la par de flutter/pubspec.yaml
-  SINAPTIC_VERSION: "1.5.0-6"
+  SINAPTIC_VERSION: "1.5.0-7"
   # UpgradeCode del MSI: FIJO PARA SIEMPRE (generado una vez el 12/10/2026). Con él cada MSI
   # nuevo reemplaza al anterior (MajorUpgrade). No cambiarlo. Ver res/msi/README.md.
   SINAPTIC_MSI_UPGRADE_CODE: "278B8821-BA28-449A-89A9-DAAB79021808"
