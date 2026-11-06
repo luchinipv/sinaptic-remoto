@@ -2895,6 +2895,10 @@ pub struct LoginConfigHandler {
     pub other_server: Option<(String, String, String)>,
     pub custom_fps: Arc<Mutex<Option<usize>>>,
     pub last_auto_fps: Option<usize>,
+    // Sinaptic Remoto (Android): la app está en segundo plano con la sesión abierta. Mientras
+    // dure se pide 1 fps y nada de audio, también al volver a entrar tras una reconexión
+    // (get_option_message), y el control automático de fps (fps_control) no lo cambia.
+    pub sinaptic_segundo_plano: bool,
     pub adapter_luid: Option<i64>,
     pub mark_unsupported: Vec<CodecFormat>,
     pub selected_windows_session_id: Option<u32>,
@@ -3447,6 +3451,13 @@ impl LoginConfigHandler {
         if view_only || self.get_toggle_option("disable-clipboard") {
             msg.disable_clipboard = BoolOption::Yes.into();
         }
+        // Sinaptic Remoto (Android): si la sesión se reconecta con la app en segundo plano,
+        // se vuelve a pedir lo mismo que set_sinaptic_segundo_plano(true); sin esto, cada
+        // reconexión en segundo plano volvía a traer vídeo a fps completo y audio.
+        if self.sinaptic_segundo_plano {
+            msg.custom_fps = 1;
+            msg.disable_audio = BoolOption::Yes.into();
+        }
         msg.supported_decoding = MessageField::some(self.get_supported_decoding());
         Some(msg)
     }
@@ -3622,6 +3633,33 @@ impl LoginConfigHandler {
             self.save_config(config);
         }
         *self.custom_fps.lock().unwrap() = Some(fps as _);
+        msg_out
+    }
+
+    /// Sinaptic Remoto (Android): la app pasa a segundo plano (`true`) o vuelve (`false`) con
+    /// la sesión abierta. Devuelve el mensaje para el equipo remoto, que no se guarda en su
+    /// configuración: en segundo plano, 1 fps y sin audio; al volver, el audio que el usuario
+    /// tenía (el fps lo repone la app con session_set_custom_fps_temporal).
+    pub fn set_sinaptic_segundo_plano(&mut self, en_segundo_plano: bool) -> Message {
+        self.sinaptic_segundo_plano = en_segundo_plano;
+        let mut option = OptionMessage::default();
+        if en_segundo_plano {
+            option.custom_fps = 1;
+            *self.custom_fps.lock().unwrap() = Some(1);
+        } else {
+            // El control automático de fps vuelve a empezar, como al abrir la sesión.
+            self.last_auto_fps = None;
+        }
+        option.disable_audio = (if en_segundo_plano || self.config.disable_audio.v {
+            BoolOption::Yes
+        } else {
+            BoolOption::No
+        })
+        .into();
+        let mut misc = Misc::new();
+        misc.set_option(option);
+        let mut msg_out = Message::new();
+        msg_out.set_misc(misc);
         msg_out
     }
 
@@ -4171,6 +4209,19 @@ pub fn start_audio_thread() -> MediaSender {
                     MediaData::AudioFormat(f) => {
                         log::debug!("recved audio format, sample rate={}", f.sample_rate);
                         audio_handler.handle_format(f);
+                    }
+                    // Sinaptic Remoto (Android): se pidió al equipo remoto que no mande audio
+                    // (app en segundo plano o «Silenciar»; ver handle_msg_from_ui en
+                    // io_loop.rs). Se cierra la salida de audio del teléfono: abierta, aunque
+                    // solo suene silencio, Android mantiene la CPU despierta (wakelock
+                    // «AudioMix», 27 min atribuidos a Sinaptic Remoto Cliente en un Galaxy S25
+                    // Ultra el 22/10/2026). Antes, silenciar solo cortaba el envío del PC
+                    // y la salida seguía abierta hasta cerrar la sesión. Cuando el equipo
+                    // remoto vuelva a mandar audio, manda antes su formato (audio_service:
+                    // run_serv_snapshot) y handle_format abre la salida de nuevo.
+                    #[cfg(target_os = "android")]
+                    MediaData::Reset => {
+                        audio_handler = AudioHandler::default();
                     }
                     _ => {}
                 }

@@ -369,14 +369,19 @@ class MainActivity : FlutterActivity() {
                     rdClipboardManager?.syncClipboard(true)
                     result.success(true)
                 }
-                // Sinaptic Remoto: sesión de control viva en segundo plano.
+                // Sinaptic Remoto: sesión de control viva en segundo plano. Devuelve false si
+                // el plazo en segundo plano ya cerró las sesiones (la app vuelve a la lista).
                 "client_keepalive" -> {
-                    when (call.arguments as? String) {
+                    val sigue = when (call.arguments as? String) {
+                        "start" -> ClientKeepAliveService.start(this@MainActivity)
                         "foreground" -> ClientKeepAliveService.update(this@MainActivity, false)
                         "background" -> ClientKeepAliveService.update(this@MainActivity, true)
-                        else -> ClientKeepAliveService.stop(this@MainActivity)
+                        else -> {
+                            ClientKeepAliveService.stop(this@MainActivity)
+                            true
+                        }
                     }
-                    result.success(true)
+                    result.success(sigue)
                 }
                 GET_START_ON_BOOT_OPT -> {
                     val prefs = getSharedPreferences(KEY_SHARED_PREFERENCES, MODE_PRIVATE)

@@ -139,8 +139,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     });
     WidgetsBinding.instance.addObserver(this);
     // Sinaptic Remoto: servicio en primer plano mientras dure la sesión de control.
+    // «start» (y no «foreground») borra la marca de sesión cerrada por el plazo.
     if (isAndroid) {
-      gFFI.invokeMethod("client_keepalive", "foreground");
+      gFFI.invokeMethod("client_keepalive", "start");
     }
 
     inputModel.keyboardInputAllowed = true;
@@ -206,8 +207,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
       if (isAndroid) {
-        gFFI.invokeMethod("client_keepalive", "foreground");
-        unawaited(_restaurarFpsTrasSegundoPlano());
+        unawaited(_volverDeSegundoPlano());
       }
     } else if (state == AppLifecycleState.paused) {
       if (isAndroid) {
@@ -217,16 +217,36 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
+  // Sinaptic Remoto: al volver a la app. Si el plazo en segundo plano ya cerró la sesión
+  // (ClientKeepAliveService devuelve false), no se reabre el servicio, cuya notificación
+  // diría «conectado» sin sesión, ni se queda la imagen congelada: se vuelve a la lista.
+  Future<void> _volverDeSegundoPlano() async {
+    final sigue = await gFFI.invokeMethod("client_keepalive", "foreground");
+    if (!mounted) return;
+    if (!sigue) {
+      showToast('La sesión se cerró por estar en segundo plano. Vuelva a conectar.');
+      closeConnection();
+      return;
+    }
+    if (_fpsBajadoEnSegundoPlano) {
+      unawaited(bind.sessionSetSinapticSegundoPlano(
+          sessionId: sessionId, enSegundoPlano: false));
+    }
+    await _restaurarFpsTrasSegundoPlano();
+  }
+
   // Sinaptic Remoto: en segundo plano nadie mira la pantalla remota, pero la sesión
-  // sigue viva hasta 10 min (ClientKeepAliveService) y el equipo remoto seguía
-  // mandando hasta 30 fps que el teléfono decodificaba por software. Se le pide 1 fps
-  // SIN guardarlo en la configuración del equipo, y al volver se repone el fps que
-  // el usuario tenía guardado (o el de siempre).
+  // sigue viva hasta 5 min (ClientKeepAliveService) y el equipo remoto seguía
+  // mandando hasta 30 fps que el teléfono decodificaba por software, y audio. Se le
+  // pide 1 fps y nada de audio SIN guardarlo en la configuración del equipo
+  // (session_set_sinaptic_segundo_plano), y al volver se repone el fps que el usuario
+  // tenía guardado (o el de siempre) y su audio.
   bool _fpsBajadoEnSegundoPlano = false;
 
   void _bajarFpsEnSegundoPlano() {
     _fpsBajadoEnSegundoPlano = true;
-    unawaited(bind.sessionSetCustomFpsTemporal(sessionId: sessionId, fps: 1));
+    unawaited(bind.sessionSetSinapticSegundoPlano(
+        sessionId: sessionId, enSegundoPlano: true));
   }
 
   Future<void> _restaurarFpsTrasSegundoPlano() async {

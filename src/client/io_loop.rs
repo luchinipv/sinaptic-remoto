@@ -797,6 +797,15 @@ impl<T: InvokeUiSession> Remote<T> {
                                 *v.discard_queue.write().unwrap() = true;
                             }
                         }
+                        // Sinaptic Remoto (Android): al pedir al equipo remoto que no mande
+                        // audio, se cierra también la salida de audio del teléfono (ver
+                        // start_audio_thread en client.rs).
+                        #[cfg(target_os = "android")]
+                        Some(misc::Union::Option(ref o))
+                            if o.disable_audio.enum_value() == Ok(BoolOption::Yes) =>
+                        {
+                            self.audio_sender.send(MediaData::Reset).ok();
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -1378,6 +1387,17 @@ impl<T: InvokeUiSession> Remote<T> {
     // The controlled end can consider auto fps as the maximum decoding fps.
     #[inline]
     fn fps_control(&mut self, direct: bool, real_fps_map: HashMap<usize, i32>) {
+        // Sinaptic Remoto (Android): en segundo plano se pidió 1 fps al equipo remoto
+        // (set_sinaptic_segundo_plano). Este control trata un fps menor que 5 como 30 y, en
+        // cuanto decidía subir o bajar, mandaba otro fps que pisaba ese 1. Error propio: el
+        // parche de batería de la 1.5.0-7 (22/10/2026) pedía 1 fps sin mirar este control, y
+        // el 25/10 Samsung seguía avisando «Sinaptic Remoto Cliente está usando demasiada
+        // batería en segundo plano». El fallo era mudo: solo deja «Set fps to N» en el log
+        // privado de la app. Se comprueba con la sesión en segundo plano y el PC cambiando
+        // de imagen: el tráfico recibido debe quedar en ~1 fotograma por segundo.
+        if self.handler.lc.read().unwrap().sinaptic_segundo_plano {
+            return;
+        }
         self.video_threads.iter_mut().for_each(|(k, v)| {
             let real_fps = real_fps_map.get(k).cloned().unwrap_or_default();
             if real_fps == 0 {

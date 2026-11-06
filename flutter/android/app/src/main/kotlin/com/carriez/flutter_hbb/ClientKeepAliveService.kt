@@ -27,15 +27,39 @@ class ClientKeepAliveService : Service() {
         private const val CHANNEL_ID = "SinapticRemotoCliente"
         private const val NOTIFY_ID = 47110
         private const val EXTRA_BACKGROUND = "background"
-        // Tiempo que la sesión aguanta en segundo plano antes de cerrarse.
-        const val BACKGROUND_TIMEOUT_MS = 10 * 60 * 1000L
+        // Tiempo que la sesión aguanta en segundo plano antes de cerrarse. Eran 10 min y el
+        // 25/10/2026, ya con la 1.5.0-7, Samsung seguía avisando en un Galaxy S25 Ultra
+        // «Sinaptic Remoto Cliente está usando demasiada batería en segundo plano»: una
+        // sesión abierta sigue recibiendo latidos del equipo remoto cada segundo (TestDelay,
+        // KCP o WebRTC) y, sin nadie mirando, solo gasta radio y CPU. 5 min alcanzan para ir
+        // a otra app a copiar algo y volver; pasado el plazo se reconecta desde la lista.
+        // No se cierra al instante (se perdería el ir y volver de «Redactar») ni se usa el
+        // tipo shortService (no puede arrancarse desde segundo plano y este servicio vive
+        // toda la sesión); bajar los latidos exige cambiar también los PC.
+        const val BACKGROUND_TIMEOUT_MS = 5 * 60 * 1000L
         // Cada cuánto se revisa el plazo. El plazo se mide con elapsedRealtime (cuenta
-        // también el sueño profundo); un solo postDelayed de 10 min usa uptimeMillis,
+        // también el sueño profundo); un solo postDelayed del plazo usa uptimeMillis,
         // que se detiene cuando la CPU duerme, y con la pantalla apagada el plazo real
-        // podía alargarse bastante más de 10 min con la sesión abierta.
+        // podía alargarse bastante más con la sesión abierta.
         private const val CHECK_INTERVAL_MS = 30 * 1000L
 
-        fun update(context: Context, background: Boolean) {
+        // El plazo cerró las sesiones. Mientras siga así, volver a la app no reabre el
+        // servicio (su notificación diría «conectado» sin sesión) y update() devuelve false
+        // para que la app vuelva a la lista. La borra start(), al abrir otra sesión.
+        @Volatile
+        var sesionesCerradasPorPlazo = false
+
+        // Al abrir una sesión nueva.
+        fun start(context: Context): Boolean {
+            sesionesCerradasPorPlazo = false
+            return update(context, false)
+        }
+
+        // Devuelve false si no se arrancó porque el plazo ya cerró las sesiones.
+        fun update(context: Context, background: Boolean): Boolean {
+            if (sesionesCerradasPorPlazo) {
+                return false
+            }
             val intent = Intent(context, ClientKeepAliveService::class.java)
             intent.putExtra(EXTRA_BACKGROUND, background)
             try {
@@ -47,6 +71,7 @@ class ClientKeepAliveService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "No se pudo arrancar el servicio: $e")
             }
+            return true
         }
 
         fun stop(context: Context) {
@@ -61,6 +86,7 @@ class ClientKeepAliveService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private val timeoutRunnable = Runnable {
         Log.i(TAG, "Plazo en segundo plano agotado: se cierran las sesiones")
+        sesionesCerradasPorPlazo = true
         try {
             FFI.closeAllSessions()
         } catch (e: Throwable) {
@@ -84,9 +110,16 @@ class ClientKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        showNotification()
-        handler.removeCallbacks(checkRunnable)
         val background = intent?.getBooleanExtra(EXTRA_BACKGROUND, false) ?: false
+        // startForeground (dentro de showNotification) va siempre primero: tras
+        // startForegroundService es obligatorio aunque el servicio se detenga enseguida.
+        showNotification(background)
+        handler.removeCallbacks(checkRunnable)
+        if (sesionesCerradasPorPlazo) {
+            // El plazo cerró las sesiones mientras llegaba este arranque.
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (background) {
             deadlineElapsed = SystemClock.elapsedRealtime() + BACKGROUND_TIMEOUT_MS
             handler.postDelayed(checkRunnable, CHECK_INTERVAL_MS)
@@ -99,7 +132,7 @@ class ClientKeepAliveService : Service() {
         super.onDestroy()
     }
 
-    private fun showNotification() {
+    private fun showNotification(background: Boolean) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -123,7 +156,13 @@ class ClientKeepAliveService : Service() {
             .setSmallIcon(R.mipmap.ic_stat_logo)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentTitle("Sinaptic Remoto conectado")
-            .setContentText("Toque para volver a la sesión remota")
+            .setContentText(
+                if (background) {
+                    "Se cierra en ${BACKGROUND_TIMEOUT_MS / 60000} min si no vuelve. Toque para volver."
+                } else {
+                    "Toque para volver a la sesión remota"
+                }
+            )
             .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
             .build()

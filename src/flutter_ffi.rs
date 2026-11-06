@@ -589,6 +589,15 @@ pub fn session_set_custom_fps_temporal(session_id: SessionID, fps: i32) {
     }
 }
 
+// Sinaptic Remoto: la app Android avisa que pasa a segundo plano (true) o que vuelve (false)
+// con la sesión abierta. En segundo plano se pide 1 fps y sin audio, sin guardarlo, y se
+// cierra la salida de audio del teléfono; al volver, el audio queda como lo tenía el usuario.
+pub fn session_set_sinaptic_segundo_plano(session_id: SessionID, en_segundo_plano: bool) {
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        session.set_sinaptic_segundo_plano(en_segundo_plano);
+    }
+}
+
 pub fn session_get_trackpad_speed(session_id: SessionID) -> Option<i32> {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         Some(session.get_trackpad_speed())

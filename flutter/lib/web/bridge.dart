@@ -461,6 +461,14 @@ class RustdeskImpl {
     return Future.value();
   }
 
+  // Sinaptic Remoto: igual que el anterior, en la web no hace nada.
+  Future<void> sessionSetSinapticSegundoPlano(
+      {required UuidValue sessionId,
+      required bool enSegundoPlano,
+      dynamic hint}) {
+    return Future.value();
+  }
+
   Future<void> sessionLockScreen({required UuidValue sessionId, dynamic hint}) {
     return Future(() => js.context.callMethod('setByName', ['lock_screen']));
   }

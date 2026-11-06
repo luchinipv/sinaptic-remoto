@@ -521,6 +521,17 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg));
     }
 
+    // Sinaptic Remoto (Android): la app pasa a segundo plano o vuelve con la sesión abierta
+    // (ver LoginConfigHandler::set_sinaptic_segundo_plano en client.rs).
+    pub fn set_sinaptic_segundo_plano(&self, en_segundo_plano: bool) {
+        let msg = self
+            .lc
+            .write()
+            .unwrap()
+            .set_sinaptic_segundo_plano(en_segundo_plano);
+        self.send(Data::Message(msg));
+    }
+
     pub fn get_remember(&self) -> bool {
         self.lc.read().unwrap().remember
     }
