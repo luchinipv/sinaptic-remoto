@@ -802,7 +802,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         // start_audio_thread en client.rs).
                         #[cfg(target_os = "android")]
                         Some(misc::Union::Option(ref o))
-                            if o.disable_audio.enum_value() == Ok(BoolOption::Yes) =>
+                            if o.disable_audio.enum_value() == Ok(option_message::BoolOption::Yes) =>
                         {
                             self.audio_sender.send(MediaData::Reset).ok();
                         }
