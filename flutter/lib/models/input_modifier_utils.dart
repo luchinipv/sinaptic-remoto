@@ -1,6 +1,92 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+/// Sinaptic Remoto: lo que hay que mandar al equipo remoto por un cambio del
+/// campo oculto del teclado blando de Android.
+class CambioTecladoBlando {
+  final int retrocesos;
+  final String texto;
+
+  /// El campo quedó desfasado respecto del teclado: hay que reiniciarlo.
+  final bool resincronizar;
+
+  const CambioTecladoBlando(this.retrocesos, this.texto, this.resincronizar);
+}
+
+/// Retrocesos que se aceptan por un solo cambio dentro del relleno. Samsung
+/// acelera el borrado sostenido y quita varios caracteres de golpe; más que esto
+/// no es el usuario borrando sino el teclado perdiendo el relleno.
+const int kMaxRetrocesosEnRelleno = 32;
+
+/// Compara lo ESCRITO, sin el relleno, para que el relleno nunca llegue al equipo
+/// remoto: ni como texto ni como retrocesos que borren lo que ya había allá.
+/// Cuenta puntos de código: un emoji es un retroceso y nunca se parte a la mitad.
+///
+/// [cursor] es la posición del cursor en [nuevo]; -1 si no se conoce.
+CambioTecladoBlando diferenciaTecladoBlando(
+  String anterior,
+  String nuevo, {
+  required int cursor,
+  required String relleno,
+}) {
+  int rellenoInicial(String s, int fin) {
+    var i = 0;
+    while (i < fin && s[i] == relleno) {
+      i++;
+    }
+    return i;
+  }
+
+  var resincronizar = false;
+  // Lo escrito quedó en medio del relleno: el relleno de la derecha no es texto.
+  var fin = nuevo.length;
+  if (cursor >= 0 &&
+      cursor < nuevo.length &&
+      rellenoInicial(nuevo.substring(cursor), nuevo.length - cursor) ==
+          nuevo.length - cursor) {
+    fin = cursor;
+    resincronizar = true;
+  }
+
+  final rellenoAntes = rellenoInicial(anterior, anterior.length);
+  final rellenoAhora = rellenoInicial(nuevo, fin);
+  final antes = anterior.substring(rellenoAntes).runes.toList(growable: false);
+  final ahora = nuevo.substring(rellenoAhora, fin).runes.toList(growable: false);
+
+  var comun = 0;
+  while (comun < antes.length &&
+      comun < ahora.length &&
+      antes[comun] == ahora[comun]) {
+    comun++;
+  }
+  var retrocesos = antes.length - comun;
+  var texto = String.fromCharCodes(ahora.skip(comun));
+
+  final perdido = rellenoAntes - (rellenoAhora + nuevo.length - fin);
+  if (perdido > 0) {
+    if (ahora.isNotEmpty) {
+      // Escribió comiéndose relleno: eso no es texto del equipo remoto.
+      resincronizar = true;
+    } else if (perdido <= kMaxRetrocesosEnRelleno) {
+      // Borrar con el campo «vacío» borra en el equipo remoto.
+      retrocesos += perdido;
+    } else {
+      if (antes.isEmpty) {
+        retrocesos += 1;
+      }
+      resincronizar = true;
+    }
+  } else if (perdido < 0) {
+    if (perdido == -1 && antes.isEmpty && ahora.isEmpty) {
+      // Un Enter sin nada escrito se confunde con relleno; uno solo es legítimo.
+      texto = relleno;
+    } else {
+      resincronizar = true;
+    }
+  }
+  return CambioTecladoBlando(retrocesos, texto, resincronizar);
+}
+
 /// Identifies where terminal input originated so paste data can bypass all
 /// keyboard-only transformations.
 enum TerminalInputSource {

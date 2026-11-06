@@ -1026,10 +1026,12 @@ class InputModel {
   /// Send key stroke event.
   /// [down] indicates the key's state(down or up).
   /// [press] indicates a click event(down and up).
-  void inputKey(String name, {bool? down, bool? press}) {
+  /// Sinaptic Remoto: devuelve el Future para que el teclado blando pueda enviar
+  /// en orden; quien no lo necesita lo sigue llamando igual.
+  Future<void> inputKey(String name, {bool? down, bool? press}) async {
     if (!keyboardPerm) return;
     if (isViewCamera) return;
-    bind.sessionInputKey(
+    await bind.sessionInputKey(
         sessionId: sessionId,
         name: name,
         down: down ?? false,

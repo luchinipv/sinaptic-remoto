@@ -551,4 +551,69 @@ void main() {
       );
     });
   });
+
+  group('diferenciaTecladoBlando', () {
+    const r = '\n';
+    final p = r * 1024;
+
+    CambioTecladoBlando diff(String a, String n, {int? cursor}) =>
+        diferenciaTecladoBlando(a, n,
+            cursor: cursor ?? n.length, relleno: r);
+
+    void revisar(CambioTecladoBlando c, int retrocesos, String texto,
+        {bool resincronizar = false}) {
+      expect(c.retrocesos, retrocesos);
+      expect(c.texto, texto);
+      expect(c.resincronizar, resincronizar);
+    }
+
+    test('escribir una letra', () {
+      revisar(diff('${p}ho', '${p}hol'), 0, 'l');
+    });
+
+    test('el corrector cambia la palabra al poner el espacio', () {
+      revisar(diff('${p}teh', '${p}the '), 2, 'he ');
+    });
+
+    test('borrar sin nada escrito borra en el equipo remoto', () {
+      revisar(diff(p, r * 1023), 1, '');
+    });
+
+    test('el borrado acelerado de Samsung cuenta cada caracter', () {
+      revisar(diff(p, r * 1016), 8, '');
+    });
+
+    test('perder casi todo el relleno de golpe no es borrar', () {
+      revisar(diff(p, r * 10), 1, '', resincronizar: true);
+    });
+
+    test('un Enter sin nada escrito se manda', () {
+      revisar(diff(p, '$p$r'), 0, r);
+    });
+
+    test('escribir y dar Enter', () {
+      revisar(diff('${p}a', '${p}a$r'), 0, r);
+    });
+
+    test('recuperar relleno de golpe no manda Enter', () {
+      revisar(diff(r * 1000, p), 0, '', resincronizar: true);
+    });
+
+    test('la palabra vuelve sin relleno: solo sale lo nuevo', () {
+      revisar(diff('${p}hol', 'hola'), 0, 'a', resincronizar: true);
+    });
+
+    test('cursor dentro del relleno: no se manda el relleno', () {
+      final nuevo = '${r * 600}x${r * 424}';
+      revisar(diff(p, nuevo, cursor: 601), 0, 'x', resincronizar: true);
+    });
+
+    test('cambiar un emoji no lo parte', () {
+      revisar(diff('$p😀', '$p😁'), 1, '😁');
+    });
+
+    test('borrar un emoji es un retroceso', () {
+      revisar(diff('${p}a😀', '${p}a'), 1, '');
+    });
+  });
 }

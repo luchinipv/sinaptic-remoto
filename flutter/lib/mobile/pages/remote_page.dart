@@ -19,13 +19,20 @@ import '../../common/widgets/overlay.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/remote_input.dart';
 import '../../models/input_model.dart';
+import '../../models/input_modifier_utils.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../utils/image.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
 
-final initText = '1' * 1024;
+// Sinaptic Remoto: en Android el relleno del campo oculto es un salto de línea y
+// no un dígito. Con '1' el teclado predictivo veía «1111…hola» como UNA palabra:
+// al corregirla se llevaba parte del relleno, y eso llegaba al equipo remoto como
+// retrocesos de más (borraba texto real) y como números. Con un separador la
+// palabra termina donde termina lo escrito. iOS conserva su relleno y su lógica.
+final kRellenoTeclado = isIOS ? '1' : '\n';
+final initText = kRellenoTeclado * 1024;
 
 // Sinaptic Remoto: opción local con el borde de la barra «Redactar» ('Y' = arriba).
 const kOpcionRedactarArriba = 'sinaptic-redactar-arriba';
@@ -66,6 +73,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
   String _value = '';
+  // Sinaptic Remoto: ver _enviarEnOrden.
+  Future<void> _colaTeclado = Future<void>.value();
   Orientation? _currentOrientation;
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
@@ -410,40 +419,35 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
+  // Sinaptic Remoto: cada llamada a Rust cae en un grupo de hilos
+  // (flutter_rust_bridge), así que dos llamadas seguidas pueden adelantarse. Un
+  // reemplazo del corrector son varias llamadas juntas (retrocesos + texto): si
+  // el texto gana a un retroceso, el retroceso se come la letra nueva. Cada envío
+  // espera a que el anterior haya entrado en la cola de la sesión.
+  void _enviarEnOrden(Future<void> Function() envio) {
+    _colaTeclado = _colaTeclado.then((_) => envio()).catchError((_) {});
+  }
+
   void _handleNonIOSSoftKeyboardInput(String newValue) {
-    var oldValue = _value;
+    final oldValue = _value;
     // Sinaptic Remoto: con texto predictivo (teclado Samsung, Gboard) el IME a
     // veces vacía el campo un instante y lo vuelve a llenar con la palabra en
-    // composición, que incluye los '1' de relleno. Antes eso mandaba un solo
-    // retroceso y luego todo el relleno («1111111»). Ese vaciado transitorio
-    // se ignora y se conserva el valor anterior para comparar.
+    // composición. Ese vaciado transitorio se ignora y se conserva el valor
+    // anterior para comparar.
     if (newValue.isEmpty && oldValue.length > 1) {
       return;
     }
     _value = newValue;
-    if (oldValue.isNotEmpty &&
-        newValue.isNotEmpty &&
-        oldValue[0] == '1' &&
-        newValue[0] != '1') {
-      // clipboard
-      oldValue = '';
+    // Sinaptic Remoto: la comparación es solo sobre lo escrito, nunca sobre el
+    // relleno, para que ningún cambio raro del IME llegue al equipo remoto.
+    final cambio = diferenciaTecladoBlando(oldValue, newValue,
+        cursor: _textController.selection.baseOffset,
+        relleno: kRellenoTeclado);
+    for (var i = 0; i < cambio.retrocesos; i++) {
+      _enviarEnOrden(() => inputModel.inputKey('VK_BACK'));
     }
-    // Sinaptic Remoto: diferencia por prefijo común en vez de solo por longitud.
-    // Así una sustitución del IME (borrar y escribir en el mismo cambio, o el
-    // autocorrector reemplazando una palabra) manda los retrocesos y el texto
-    // nuevo exactos, en lugar de no mandar nada («sale en blanco»).
-    var common = 0;
-    while (common < oldValue.length &&
-        common < newValue.length &&
-        oldValue[common] == newValue[common]) {
-      common++;
-    }
-    final deletes = oldValue.length - common;
-    for (var i = 0; i < deletes; i++) {
-      inputModel.inputKey('VK_BACK');
-    }
-    if (newValue.length > common) {
-      final content = newValue.substring(common);
+    final content = cambio.texto;
+    if (content.isNotEmpty) {
       if (content.length > 1) {
         if (oldValue != '' &&
             content.length == 2 &&
@@ -457,14 +461,21 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 content == '（）' ||
                 content == '【】')) {
           // can not only input content[0], because when input ], [ are also auo insert, which cause ] never be input
-          bind.sessionInputString(sessionId: sessionId, value: content);
+          _enviarEnOrden(() =>
+              bind.sessionInputString(sessionId: sessionId, value: content));
           _openKeyboardUnlocked();
           return;
         }
-        bind.sessionInputString(sessionId: sessionId, value: content);
+        _enviarEnOrden(() =>
+            bind.sessionInputString(sessionId: sessionId, value: content));
       } else {
-        inputChar(content);
+        _enviarEnOrden(() => inputChar(content));
       }
+    }
+    // Sinaptic Remoto: el campo y el teclado quedaron desfasados: se hace solo lo
+    // que el usuario hacía a mano, cerrar y reabrir (reinicia _value y el IME).
+    if (cambio.resincronizar) {
+      _openKeyboardUnlocked();
     }
   }
 
@@ -480,7 +491,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  void inputChar(String char) {
+  Future<void> inputChar(String char) async {
     if (!inputModel.keyboardInputAllowed) {
       return;
     }
@@ -489,7 +500,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     } else if (char == ' ') {
       char = 'VK_SPACE';
     }
-    inputModel.inputKey(char);
+    await inputModel.inputKey(char);
   }
 
   void openKeyboard() {
